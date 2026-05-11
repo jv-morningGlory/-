@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx playwright *)",
+      "Bash(npm install *)",
+      "Bash(mkdir -p \"$HOME/.claude/mcp-servers/\")",
+      "Bash(timeout 5 node \"C:/Users/heyoufeng/.claude/mcp-servers/fetch-server.mjs\")",
+      "Bash(npm init *)",
+      "Bash(timeout 10 node \"C:/Users/heyoufeng/.claude/mcp-servers/fetch-server.mjs\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\heyoufeng\\Desktop\\随笔\\__TRACKED_VAR__\\.claude"
+    ]
+  }
+}
