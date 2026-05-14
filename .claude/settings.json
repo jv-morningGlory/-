@@ -8,7 +8,16 @@
       "Bash(npm init *)",
       "Bash(timeout 10 node \"C:/Users/heyoufeng/.claude/mcp-servers/fetch-server.mjs\")",
       "WebFetch(domain:hermes-agent.nousresearch.com)",
-      "mcp__mcp-fetch__fetch"
+      "mcp__mcp-fetch__fetch",
+      "Bash(ls -la \"C:\\\\Users\\\\heyoufeng\\\\AppData\\\\Roaming\\\\ynote-desktop\\\\\")",
+      "Read(//c/Users/heyoufeng/AppData/Roaming/**)",
+      "Read(//c/Users/heyoufeng/AppData/Roaming/ynote-desktop/**)",
+      "mcp__mcp_server_mysql__mysql_query",
+      "Bash(sqlite3 \"/c/Users/heyoufeng/AppData/Roaming/ynote-desktop/m13042296286@163.com/ynote-data/m13042296286@163.com.db\" \".tables\")",
+      "Bash(python3 -c \"import sqlite3; conn = sqlite3.connect\\('/c/Users/heyoufeng/AppData/Roaming/ynote-desktop/m13042296286@163.com/ynote-data/m13042296286@163.com.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\(\\\\\"SELECT name FROM sqlite_master WHERE type='table'\\\\\"\\); print\\([row[0] for row in cursor.fetchall\\(\\)]\\)\")",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c 'import sqlite3,sys;conn=sqlite3.connect\\(sys.argv[1]\\);c=conn.cursor\\(\\);c.execute\\(\"SELECT name FROM sqlite_master WHERE type=\\\\x27table\\\\x27\"\\);print\\([r[0] for r in c.fetchall\\(\\)]\\)' \"C:/Users/heyoufeng/AppData/Roaming/ynote-desktop/m13042296286@163.com/ynote-data/m13042296286@163.com.db\")",
+      "Bash(python3 query_youdao.py)"
     ],
     "additionalDirectories": [
       "C:\\Users\\heyoufeng\\Desktop\\随笔\\__TRACKED_VAR__\\.claude"
