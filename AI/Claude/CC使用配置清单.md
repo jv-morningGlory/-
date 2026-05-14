@@ -91,13 +91,47 @@ npx skills add https://github.com/vercel-labs/next-skills -a claude-code --skill
 
 ## 三、Memory 记忆系统
 
-Claude Code 自带持久化记忆系统，在 `~/.claude/projects/<项目>/memory/` 下存储记忆文件：
+Claude Code 自带持久化记忆系统，每个项目自动在 `~/.claude/projects/<项目路径>/memory/` 下维护记忆文件。这是 CLAUDE.md 之外的另一个持久化层——CLAUDE.md 存规范，Memory 存"发生过什么"。
 
-- **用户偏好**：你的角色、技术栈、回复风格
-- **反馈记录**：你纠正过的做法，下次不会再犯
-- **项目背景**：当前在做什么、为什么这样做
+### 3.1 记忆存储结构
 
-无需手动配置，但可以主动管理——告诉 Claude "记住这个" 或 "忘掉那个"。这是 CLAUDE.md 之外的另一个持久化层。
+```
+~/.claude/projects/c--Users-heyoufeng-Desktop-xxx--/
+└── memory/
+    ├── MEMORY.md          ← 索引文件（每行一条摘要，CLI 自动加载）
+    ├── user_role.md       ← 用户角色、技术栈、偏好
+    ├── feedback_test.md   ← 你纠正过的做法，下次不再犯
+    └── project_xxx.md     ← 项目背景：正在做什么、为什么
+```
+
+**MEMORY.md 是索引，不是正文**——内容很短，每行一个条目链接，确保每次会话都能快速加载。
+
+### 3.2 四种记忆类型
+
+| 类型 | 存什么 | 示例 |
+|------|--------|------|
+| **user** | 你的角色、技术栈、知识背景 | "Java 后端，10 年经验，刚接触前端" |
+| **feedback** | 你纠正过的做法 + 原因 | "不要 mock 数据库，上次 mock 通过但生产炸了" |
+| **project** | 项目当前的背景、目标、约束 | "正在重构认证模块，截止周五冻结" |
+| **reference** | 外部系统在哪找 | "Bug 跟踪在 Linear 项目 INGEST" |
+
+### 3.3 使用方式
+
+```
+"把这个规则记住"       → Claude 写入对应类型的 memory 文件
+"忘掉上次那个规则"     → Claude 删除对应 memory
+"这个项目还有哪些背景？" → Claude 读取 MEMORY.md 索引
+```
+
+Claude 会在每次会话开始时自动加载 MEMORY.md。当相关记忆匹配当前任务时，Claude 会读取对应文件获取详情。
+
+### 3.4 什么不该存
+
+- 代码规范、架构、文件路径 → 这些在 CLAUDE.md 里
+- Git 历史 → `git log` 自己查
+- 一次性调试记录 → 修完就过时了
+
+> Memory 的核心价值：跨会话记住"你是谁"和"发生过什么"，让 AI 在新会话中不需要重新认识你。
 
 ---
 
