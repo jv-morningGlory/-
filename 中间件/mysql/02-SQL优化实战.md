@@ -407,104 +407,365 @@ spring.shardingsphere.rules.readwrite-splitting.data-sources.myds:
 
 ---
 
-## EXPLAIN 执行计划详解
+## EXPLAIN 执行计划实战解读
 
-通过 `EXPLAIN` 查看 SQL 的执行计划，是优化的核心工具。
+EXPLAIN 不是用来"读懂每个字段含义"的，而是用来**快速定位问题、指导优化动作**的。
 
-### 示例表结构
+**实战解读顺序**：
 
-```sql
-CREATE TABLE student (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  name VARCHAR(20),
-  age INT(2),
-  KEY idx_name (name),
-  KEY idx_name_age (name, age),
-  KEY idx_id_name_age (id, name, age)
-);
-
-CREATE TABLE course (
-  id INT PRIMARY KEY AUTO_INCREMENT,
-  name VARCHAR(20)
-);
-
-CREATE TABLE stu_course (
-  sid INT NOT NULL,
-  cid INT NOT NULL,
-  PRIMARY KEY (sid, cid)
-);
+```
+type（访问方式） → filtered（过滤效率） → Extra（额外操作） → id/select_type（查询结构）
 ```
 
-### id 列：执行顺序
+先看访问方式和过滤效率（决定性能 80%），再看有没有额外开销（临时表/排序），最后才看查询结构是否需要简化。
 
-- **id 不同**：值越大越先执行（子查询场景）
-- **id 相同**：从上到下顺序执行（JOIN 场景）
+### 一、type：这条 SQL 在怎么拿数据？
 
-### select_type 列：查询类型
+type 告诉你 MySQL 用什么方式定位数据——这是**决定性能的最重要的一个字段**。
 
-| 类型 | 描述 |
-|------|------|
-| **SIMPLE** | 简单查询，不含子查询和 UNION |
-| **PRIMARY** | 复杂查询中最外层的 SELECT |
-| **SUBQUERY** | SELECT 中的子查询（不在 FROM 子句中） |
-| **DERIVED** | FROM 子句中的子查询（派生表），结果存入临时表 |
-| **UNION** | UNION 中的第二个及后续 SELECT |
-| **UNION RESULT** | UNION 操作的结果集 |
+**实战判断标准**：
 
-### type 列：访问类型（性能核心指标）
+| type | 含义 | 你该做什么 |
+|------|------|------------|
+| **system / const** | 表只有一行 / 通过主键或唯一索引精确匹配一行 | ✅ 最优，无需优化 |
+| **eq_ref** | JOIN 时通过主键或唯一索引关联，每次只匹配一行 | ✅ JOIN 最优，无需优化 |
+| **ref** | 通过普通索引等值查找，可能匹配多行 | ✅ 可接受，确认返回行数合理即可 |
+| **range** | 索引范围扫描（BETWEEN、>、<、IN） | ⚠️ 可接受，注意范围不要太大 |
+| **index** | 全索引扫描——遍历整棵索引树 | ❌ 通常需优化，见下方分析 |
+| **ALL** | 全表扫描——遍历整张表 | ❌ 必须优化 |
 
-性能从优到劣：**system > const > eq_ref > ref > range > index > ALL**
+> **记住这条线**：`ref` 及以上是健康的，`range` 看场景，`index` 和 `ALL` 是问题信号。
 
-| 类型 | 描述 | 示例 |
-|------|------|------|
-| **system** | 表中只有一行记录（系统表或衍生表只有一行） | - |
-| **const** | 通过主键或**唯一索引**查到单条记录 | `WHERE id = 10` |
-| **eq_ref** | JOIN 时使用主键或唯一索引关联，每次关联只匹配一行 | `JOIN ... ON A.id = B.id` |
-| **ref** | 使用**非唯一索引**查找，可能匹配多行 | `WHERE name = '张飞'`（name 有普通索引） |
-| **range** | 索引**范围扫描**（BETWEEN、>、< 等） | `WHERE age > 30`（age 有索引） |
-| **index** | **全索引扫描**，扫描整棵索引树，不回表 | `SELECT name FROM student`（name 有索引且查询列在索引中） |
-| **ALL** | **全表扫描**，需优化 | `WHERE age > 30`（age 无索引） |
+**type = ALL，最常见的问题——缺索引**
 
-> `index` 和 `ALL` 都需要扫描全部数据，区别在于 `index` 扫描索引树（体积更小），`ALL` 扫描聚簇索引（数据行）。如果查询列不在索引中，`index` 仍需回表，性能接近 `ALL`。
+```sql
+EXPLAIN SELECT * FROM student WHERE age = 20;
+-- type: ALL, key: NULL
+-- 含义：没有索引可用，扫描全表找 age=20 的行
+-- 动作：加索引
+ALTER TABLE student ADD INDEX idx_age (age);
+-- 再次 EXPLAIN → type: ref, key: idx_age ✅
+```
 
-### possible_keys 与 key
+**type = index，为什么也要优化？**
 
-| 字段 | 说明 |
-|------|------|
-| **possible_keys** | 查询**可能使用**的索引列表 |
-| **key** | 实际使用的索引，NULL 表示未使用索引 |
+```sql
+EXPLAIN SELECT * FROM student ORDER BY name;
+-- type: index, key: idx_name, Extra: NULL
+-- 含义：走了 idx_name 索引，但扫描了整棵索引树
+--       而且 SELECT * 需要回表拿所有列 → 实际扫描量 ≈ 全表扫描
+-- 动作：如果只要部分列 → 用覆盖索引；如果业务不需要全部数据 → 加 WHERE 缩小范围
+```
 
-### key_len 列：索引使用长度
+`index` 和 `ALL` 的区别：`index` 扫描的是二级索引（体积小），`ALL` 扫描聚簇索引（数据行）。但如果你查询的列不在索引里，`index` 也要回表，性能和 `ALL` 差不多。
 
-通过 `key_len` 可推断联合索引实际使用了哪些列。
+**type = ref，也要看 rows**
+
+```sql
+EXPLAIN SELECT * FROM student WHERE name = '张飞';
+-- type: ref, key: idx_name, rows: 50000
+-- 含义：走了索引，但 name='张飞' 匹配了 5 万行
+-- 动作：考虑联合索引缩小范围
+ALTER TABLE student ADD INDEX idx_name_city (name, city);
+-- WHERE name = '张飞' AND city = '北京' → rows 可能降到几百
+```
+
+> **type 告诉你"走了什么路"，rows 告诉你"这条路有多长"。路对了但太长，仍然需要优化。**
+
+---
+
+### 二、filtered + rows：索引选得对不对？
+
+**`rows`**：MySQL 估算存储引擎需要扫描的行数。
+
+**`filtered`**：存储引擎返回的行经过 WHERE 过滤后，**剩余的比例**。
+
+**核心公式**：
+
+```
+实际交给下一步处理的行数 ≈ rows × filtered%
+```
+
+**为什么 filtered 越接近 100% 越好？**
+
+```
+filtered = 100%  →  引擎返回 1000 行，WHERE 过滤后还是 1000 行
+                     说明索引精准命中，没有浪费
+
+filtered = 10%   →  引擎返回 1000 行，WHERE 过滤后只剩 100 行
+                     说明引擎做了 900 行的无用功，90% 的数据白查了
+```
+
+**低 filtered 的本质：索引选得不够精确，让引擎多做了大量无效扫描。**
+
+**实战案例：为什么 filtered 低？怎么修？**
+
+```sql
+-- 场景：查询名字叫张飞且年龄 20 的学生
+-- 索引：idx_name (name)
+
+EXPLAIN SELECT * FROM student WHERE name = '张飞' AND age = 20;
+-- type: ref, key: idx_name, rows: 5000, filtered: 10%
+-- 分析：索引只用了 name，找到 5000 行叫"张飞"的
+--       然后在这 5000 行里逐行检查 age=20，只有 500 行满足
+--       4500 行白扫了 → filtered = 500/5000 = 10%
+```
+
+**修复思路：把 WHERE 中更多条件"收编"到索引里**
+
+```sql
+-- 建联合索引，把 age 也加进去
+ALTER TABLE student ADD INDEX idx_name_age (name, age);
+
+EXPLAIN SELECT * FROM student WHERE name = '张飞' AND age = 20;
+-- type: ref, key: idx_name_age, rows: 500, filtered: 100%
+-- 索引直接定位到 name='张飞' AND age=20 的行，无废扫描
+```
+
+> **一句话：filtered 低 = 索引没有覆盖 WHERE 的所有条件 = 有大量行被引擎扫出来又被 Server 层扔掉。解决方法就是把 WHERE 中的高频过滤条件加到联合索引里。**
+
+**另一个常见场景：JOIN 中的 filtered**
+
+```sql
+EXPLAIN
+SELECT s.name, c.name AS course_name
+FROM student s
+JOIN stu_course sc ON s.id = sc.sid
+JOIN course c ON sc.cid = c.id
+WHERE s.city = '北京';
+```
+
+如果 student 表的 `filtered = 1%`，说明：
+- 引擎扫了大量学生行
+- 但只有 1% 满足 `city = '北京'`
+- 99% 的 JOIN 操作是白做的
+
+**修复思路**：
+
+```sql
+-- 方案 1：给 city 加索引，让 WHERE city = '北京' 走索引直接过滤
+ALTER TABLE student ADD INDEX idx_city (city);
+-- EXPLAIN → type: ref, filtered: 100%（接近），只有北京的学生参与 JOIN
+
+-- 方案 2：用子查询先过滤出北京学生的 id，再 JOIN（适合 city 无索引或数据量大的场景）
+SELECT s.name, c.name AS course_name
+FROM (
+    SELECT id, name FROM student WHERE city = '北京'
+) s
+JOIN stu_course sc ON s.id = sc.sid
+JOIN course c ON sc.cid = c.id;
+-- 子查询先缩小驱动表到"北京学生"，再 JOIN → 减少 JOIN 次数
+```
+
+> **核心思路**：JOIN 的成本 = 驱动表行数 × 每行查被驱动表的代价。filtered 低 = 驱动表行数被白白放大了。要么让 WHERE 走索引精准过滤（方案 1），要么提前把小结果集作为驱动表（方案 2）。
+
+---
+
+### 三、Extra：有没有额外开销？
+
+Extra 告诉你除了正常的数据访问之外，MySQL 还干了什么额外的事。
+
+| Extra | 实际含义 | 你的动作 |
+|-------|----------|----------|
+| **Using index** | 覆盖索引，查询列全在索引里，不需要回表 | ✅ 最优 |
+| **Using where** | Server 层用 WHERE 对引擎返回的行做了过滤 | ⚠️ 正常，但结合 filtered 看——如果 filtered 低，说明过滤浪费大 |
+| **Using index condition** | 索引条件下推（ICP），引擎层提前用索引列过滤，减少回表 | ✅ 已优化，MySQL 5.6+ 自动触发 |
+| **Using temporary** | 用了临时表（GROUP BY / DISTINCT / UNION 常见） | ❌ 需优化，GROUP BY 字段加索引或改写 |
+| **Using filesort** | 额外排序（ORDER BY 字段没走索引） | ❌ 需优化，给 ORDER BY 字段加索引 |
+| **Using join buffer** | 被驱动表没有索引，用了 join buffer 做块嵌套循环 | ❌ 给被驱动表的 JOIN 字段加索引 |
+
+**Using temporary + Using filesort 同时出现的经典场景**：
+
+```sql
+EXPLAIN SELECT city, COUNT(*) FROM student GROUP BY city;
+-- Extra: Using temporary; Using filesort
+-- 含义：MySQL 建了临时表做分组，又做了排序（GROUP BY 默认排序）
+-- 动作 1：如果不需要排序结果 → ORDER BY NULL 省掉 filesort
+-- 动作 2：给 city 加索引 → 可能消除临时表
+```
+
+**Using index（覆盖索引）的价值**：
+
+```sql
+-- 查询列不在索引里 → 需要回表
+EXPLAIN SELECT * FROM student WHERE name = '张飞';
+-- Extra: Using where（可能）, 需要回表拿 * 的所有列
+
+-- 只查索引包含的列 → 覆盖索引，不回表
+EXPLAIN SELECT id, name FROM student WHERE name = '张飞';
+-- Extra: Using index ✅
+```
+
+> 覆盖索引的代价是索引变宽（占用更多磁盘和内存），适合**高频查询**，不要为了覆盖索引无脑加列。
+
+---
+
+### 四、key_len：联合索引用了几列？
+
+`key_len` 是**实际使用的索引字节数**，用来判断联合索引到底生效了几列。
 
 **计算规则**：
 
-- 字符串：字符数 × 字符集字节数（utf8mb4=4, utf8=3）+ 允许 NULL（+1）+ 变长类型（+2）
-- 整数：TINYINT=1, SMALLINT=2, INT=4, BIGINT=8
+- VARCHAR(N)：N × 字符集字节数（utf8mb4=4）+ 允许 NULL（+1）+ 变长类型（+2）
+- INT：4 字节，BIGINT：8 字节
 
-示例：联合索引 `idx_name_age (name VARCHAR(20), age INT)`，utf8mb4，均 NOT NULL：
+**实战用法**：
 
-- `WHERE name = 'Alice'`：key_len = 20 × 4 = **80**（仅用了 name 列）
-- `WHERE name = 'Alice' AND age = 10`：key_len = 80 + 4 = **84**（用了全部列）
+```sql
+-- 联合索引 idx_name_age (name VARCHAR(20), age INT)，utf8mb4，NOT NULL
+-- name 的 key_len = 20×4 + 2(变长) = 82
+-- age 的 key_len = 4
+-- 全部用上 = 82 + 4 = 86
 
-### filtered 列（MySQL 5.7+）
+-- 情况 1：只用了 name
+EXPLAIN SELECT * FROM student WHERE name = '张飞';
+-- key_len: 82 → 只用了联合索引第一列
 
-存储引擎返回的数据经 WHERE 过滤后剩余行的百分比估算。`rows × filtered` 估算下一步需处理的行数。越接近 100% 说明索引效果越好。
+-- 情况 2：用了 name + age
+EXPLAIN SELECT * FROM student WHERE name = '张飞' AND age = 20;
+-- key_len: 86 → 两列都用上了
 
-### ref 列
+-- 情况 3：跳过了 name，只用 age
+EXPLAIN SELECT * FROM student WHERE age = 20;
+-- key: NULL, key_len: NULL → 索引完全没用上，违反最左前缀
+```
 
-显示与索引比较的列或常量，常见值：`const`（常量）、`func`（函数结果）、其他表的列名。
+> **key_len 帮你验证联合索引是否按预期生效。如果 key_len 比预期小，说明有些索引列白建了。**
 
-### Extra 列：额外信息
+---
 
-| 值 | 含义 | 优化建议 |
-|----|------|----------|
-| **Using index** | **覆盖索引**，查询列都在索引中，无需回表 | 性能极佳 |
-| **Using where** | 存储引擎返回行后，Server 层再按 WHERE 过滤 | 正常 |
-| **Using index condition** | **索引条件下推**（ICP，MySQL 5.6+），在存储引擎层提前过滤，减少回表 | 性能良好 |
-| **Using temporary** | 使用临时表（常见于 GROUP BY、ORDER BY） | **需优化**，考虑加索引 |
-| **Using filesort** | 需要额外排序操作（未走索引排序） | **需优化**，考虑 ORDER BY 字段加索引 |
+### 五、id + select_type：查询结构有没有问题？
+
+`id` 和 `select_type` 不是用来判断性能好坏的，而是帮你**理解 MySQL 把你的 SQL 拆成了几步**，以及这些步骤的结构是否有优化空间。
+
+**id 的规则**：
+
+- id 越大越先执行（子查询场景）
+- id 相同则从上到下执行（JOIN 场景）
+
+**select_type 的实战意义**：
+
+| select_type | 实战含义 | 优化动作 |
+|-------------|----------|----------|
+| **SIMPLE** | 单条 SELECT，没有子查询和 UNION | ✅ 结构最简，通常无需改写 |
+| **PRIMARY** | 最外层 SELECT | 本身无问题，关注它内部的子查询 |
+| **SUBQUERY** | SELECT 中的子查询 | ⚠️ 考虑改写为 JOIN，减少独立子查询的开销 |
+| **DERIVED** | FROM 中的子查询（派生表） | ❌ 会生成临时表，考虑改写为 JOIN 或提前物化 |
+| **UNION** | UNION 中的后续 SELECT | ⚠️ 确认是否需要去重，不需要则改用 UNION ALL |
+| **UNION RESULT** | UNION 的合并结果 | 这是合并阶段，关注前面的步骤是否高效 |
+
+**实战案例：DERIVED 是性能杀手**
+
+```sql
+EXPLAIN
+SELECT s.name
+FROM (SELECT sid FROM stu_course WHERE cid = 1) tmp
+JOIN student s ON tmp.sid = s.id;
+-- id=1: PRIMARY, s → type: eq_ref
+-- id=2: DERIVED, stu_course → type: ref
+-- select_type=DERIVED → 子查询结果存临时表 → 额外的内存/磁盘开销
+```
+
+**改写为 JOIN，消除临时表**：
+
+```sql
+EXPLAIN
+SELECT s.name
+FROM stu_course sc
+JOIN student s ON sc.sid = s.id
+WHERE sc.cid = 1;
+-- select_type: SIMPLE（只有一个 SIMPLE，无子查询）
+-- 无临时表，执行路径更短
+```
+
+**实战案例：SUBQUERY 改写**
+
+```sql
+-- 子查询方式
+EXPLAIN SELECT * FROM student
+WHERE id IN (SELECT sid FROM stu_course WHERE cid = 1);
+-- id=1: PRIMARY, student
+-- id=2: SUBQUERY, stu_course
+
+-- 改写为 JOIN
+EXPLAIN SELECT s.* FROM student s
+JOIN stu_course sc ON s.id = sc.sid WHERE sc.cid = 1;
+-- select_type: SIMPLE，结构更简单，优化器有更大优化空间
+```
+
+> **看到 SUBQUERY / DERIVED / UNION 不一定就慢，但它们是优化器发挥空间受限的信号。如果你的 SQL 已经有性能问题，优先把这些结构改写成 JOIN。**
+
+---
+
+### 六、possible_keys 与 key：索引为什么没被选中？
+
+| 字段 | 含义 |
+|------|------|
+| **possible_keys** | MySQL 认为可用的索引列表 |
+| **key** | 实际选择的索引，NULL = 没用索引 |
+
+**实战关注点**：
+
+```sql
+-- 情况 1：possible_keys 有值，key 也有值 → 正常走了索引
+-- 情况 2：possible_keys 有值，key 是 NULL → MySQL 认为全表扫描更快
+--          通常是因为表小，或者索引区分度太低
+-- 情况 3：possible_keys 是 NULL，key 也是 NULL → 根本没有可用索引
+--          需要建索引
+
+-- 情况 2 的常见原因：索引区分度太低
+EXPLAIN SELECT * FROM student WHERE gender = 'M';
+-- possible_keys: idx_gender, key: NULL
+-- gender 只有 M/F 两种值，MySQL 判定全表扫描比走索引+回表更快
+-- 动作：这种低区分度字段单独建索引意义不大，考虑联合索引
+```
+
+---
+
+### 七、ref 列：索引在跟什么做比较？
+
+ref 显示索引列在跟什么值比较：
+
+- `const`：跟常量比较（最好）
+- `列名`：跟另一张表的列比较（JOIN 场景，正常）
+- `func`：跟函数结果比较（⚠️ 可能意味着索引列被函数包裹了）
+
+```sql
+-- ref = func 的警告信号
+EXPLAIN SELECT * FROM student WHERE DATE(create_time) = '2026-06-01';
+-- ref: func → 对索引列用了函数，索引可能失效
+-- 修复：改写为范围查询
+SELECT * FROM student WHERE create_time >= '2026-06-01' AND create_time < '2026-06-02';
+```
+
+---
+
+### EXPLAIN 实战解读 Checklist
+
+拿到一个 EXPLAIN 结果，按这个顺序逐项检查：
+
+```
+1. type 是不是 ALL 或 index？
+   → ALL：缺索引或索引失效，加索引或修复失效
+   → index：确认是否需要回表，考虑覆盖索引或加 WHERE 缩范围
+
+2. filtered 是不是很低（< 30%）？
+   → 低 = 索引没覆盖 WHERE 中的条件，引擎白扫了大量行
+   → 把 WHERE 中更多条件加入联合索引
+
+3. Extra 有没有 Using temporary 或 Using filesort？
+   → temporary：GROUP BY/DISTINCT 字段加索引，或改写查询
+   → filesort：ORDER BY 字段加索引，或利用已有索引的排序
+
+4. key_len 是否符合预期？
+   → 比预期小 = 联合索引没有用满，检查 WHERE 条件是否违反最左前缀
+
+5. select_type 有没有 DERIVED / SUBQUERY？
+   → 有的话考虑改写为 JOIN，减少临时表和子查询开销
+
+6. rows × filtered 的乘积大不大？
+   → 这是 MySQL 估算的"实际处理行数"，如果很大 → 即使 type 是 ref 也需要优化
+```
 
 ---
 
@@ -750,43 +1011,127 @@ IN 更简洁，且 MySQL 对 IN 列表的优化通常优于 OR。
 
 ## JOIN 优化
 
-### 小表驱动大表
-
-JOIN 的执行过程：从驱动表逐行取数据，每取一行就去被驱动表里查一次匹配。
+JOIN 的核心成本公式：
 
 ```
-总 I/O ≈ 驱动表扫描 I/O + (驱动表行数 × 被驱动表单次索引查找 I/O)
+总 I/O ≈ 驱动表扫描 + (驱动表行数 × 被驱动表单次查找 I/O)
 ```
 
-关键在于**驱动表行数决定了被驱动表被查多少次**。
+**两个优化杠杆**：① 减少驱动表行数（小表驱动大表） ② 降低被驱动表单次查找代价（被驱动表 JOIN 字段加索引）。
 
-假设小表 1000 行，大表 100 万行，被驱动表有索引（单次查找约 2~3 次 I/O）：
+---
 
-| | 小表驱动大表 | 大表驱动小表 |
+### 一、被驱动表必须有索引（INLJ vs BNLJ）
+
+**这是 JOIN 优化最高优先级的动作。**
+
+被驱动表 JOIN 字段有索引 → 走 **Index Nested Loop Join**（INLJ），每次通过索引查找，O(log n)。
+
+被驱动表 JOIN 字段无索引 → 走 **Block Nested Loop Join**（BNLJ），每次扫描被驱动表的一大块数据，代价飙升。
+
+**实战案例**：
+
+```sql
+-- 订单表 100 万行，用户表 1 万行
+-- 查：下过订单的用户信息
+
+EXPLAIN SELECT u.* FROM orders o JOIN user u ON o.user_id = u.id;
+```
+
+| 情况 | Extra | 你该做什么 |
+|------|-------|------------|
+| `u.id` 是主键 | 走 INLJ，type: eq_ref | ✅ 正常 |
+| `o.user_id` 无索引，且优化器选了 orders 做驱动表 | 可能走 BNLJ，Extra: Using join buffer | ❌ 给 `o.user_id` 加索引 |
+
+```sql
+-- 修复：给被驱动表的 JOIN 字段加索引
+ALTER TABLE orders ADD INDEX idx_user_id (user_id);
+```
+
+> **怎么判断当前走的哪种 JOIN？** EXPLAIN 结果中 Extra 出现 `Using join buffer` → 走的 BNLJ → 被驱动表缺索引，优先加索引。
+
+---
+
+### 二、小表驱动大表
+
+驱动表行数决定了被驱动表被查多少次。假设被驱动表有索引（单次查找 2~3 次 I/O）：
+
+| | 小表（1000 行）驱动 | 大表（100 万行）驱动 |
 |------|-------------|-------------|
-| 扫描驱动表 | 读 1000 行 | 读 100 万行 |
-| 查被驱动表 | 1000 次 × 3 I/O = **3000 次** | 100 万次 × 3 I/O = **300 万次** |
-| **总 I/O** | **≈ 3000 次** | **≈ 300 万次** |
+| 扫描驱动表 | 1000 行 | 100 万行 |
+| 查被驱动表 | 1000 × 3 = **3000 次 I/O** | 100 万 × 3 = **300 万次 I/O** |
 
-> 同样的 JOIN 结果，驱动表越小，被驱动表被访问的次数越少，I/O 差距可达千倍。
+同样的结果，I/O 差 1000 倍。
 
-### 三种 Nested Loop Join 模型
+**怎么控制谁是驱动表？**
 
-| 模型 | 条件 | 原理 | 性能 |
-|------|------|------|------|
-| **SNLJ**（Simple NLJ） | 被驱动表无索引 | 驱动表每行都触发被驱动表**全表扫描** | 极差，MySQL 已弃用 |
-| **BNLJ**（Block NLJ） | 被驱动表无索引 | 驱动表每次读取**一批**数据到 join buffer，减少被驱动表扫描次数 | 中等 |
-| **INLJ**（Index NLJ） | 被驱动表有索引 | 被驱动表通过**索引查找**，无需全表扫描 | 最好 |
+| JOIN 类型 | 驱动表由谁决定 | 你能做什么 |
+|-----------|---------------|------------|
+| **LEFT JOIN** | **左表固定为驱动表** | 把小表放左边：`小表 LEFT JOIN 大表` |
+| **INNER JOIN** | 优化器自动选 | MySQL 通常选行数少的做驱动表，但可能选错 |
 
-### MySQL 优化器的驱动表选择
+**INNER JOIN 优化器选错了怎么办？**
 
-| JOIN 类型 | 驱动表 | 说明 |
-|-----------|--------|------|
-| **INNER JOIN** | 优化器自动选择 | 不影响结果，MySQL 有完全自主选择权 |
-| **LEFT JOIN** | 左表固定为驱动表 | 调换顺序会影响结果 |
+```sql
+-- 场景：order_detail 1000 万行，product 100 行
+-- 优化器误判，选了 order_detail 做驱动表
 
-### 优化建议
+-- 方案 1：用 STRAIGHT_JOIN 强制左表驱动（MySQL 独有语法）
+SELECT p.name, od.amount
+FROM product STRAIGHT_JOIN order_detail od ON p.id = od.product_id;
 
-- 确保被驱动表的 JOIN 字段有索引（走 INLJ）
-- 用小表驱动大表
-- 减少 JOIN 的字段数量，避免 `SELECT *`
+-- 方案 2：用子查询先缩小驱动表范围
+SELECT od.amount, p.name
+FROM (
+    SELECT * FROM order_detail WHERE create_time > '2026-06-01'
+) od
+JOIN product p ON od.product_id = p.id;
+```
+
+> `STRAIGHT_JOIN` 会禁用优化器的表顺序选择，只在确认优化器选错时使用，不要滥用。
+
+---
+
+### 三、JOIN 前先过滤，减少驱动表行数
+
+即使驱动表选对了，如果驱动表全量扫描再 JOIN，仍然很慢。核心思路：**WHERE 能提前过滤的不要留到 JOIN 之后**。
+
+```sql
+-- ❌ 先全量 JOIN，再过滤
+SELECT o.id, u.name
+FROM orders o
+JOIN user u ON o.user_id = u.id
+WHERE o.status = 1 AND u.city = '北京';
+
+-- ✅ 驱动表先过滤再 JOIN（优化器通常会自动做，但显式写更清晰）
+SELECT o.id, u.name
+FROM (
+    SELECT id, user_id FROM orders WHERE status = 1
+) o
+JOIN (
+    SELECT id, name FROM user WHERE city = '北京'
+) u ON o.user_id = u.id;
+```
+
+> 实际上 MySQL 优化器多数时候会自动做"条件下推"，但遇到复杂查询（嵌套子查询、多表 JOIN）时可能下推失败。用 EXPLAIN 检查 rows 和 filtered，如果驱动表 rows 远大于预期 → 优化器没做条件过滤 → 手动改写。
+
+---
+
+### 四、JOIN 优化实战 Checklist
+
+拿到一条慢 JOIN 查询，按顺序检查：
+
+```
+1. EXPLAIN 看 Extra 有没有 Using join buffer？
+   → 有 = 被驱动表没走索引 → 给 JOIN 字段加索引（最高优先级）
+
+2. 驱动表行数大不大？（看 rows 列）
+   → 大 = 考虑换驱动表方向，或用 STRAIGHT_JOIN 强制
+   → LEFT JOIN 时直接把小表放左边
+
+3. 驱动表有没有提前过滤？（看 filtered 列）
+   → filtered 低 = 大量行白 JOIN 了 → 加 WHERE 条件或用子查询先过滤
+
+4. SELECT 的列是不是太多？
+   → SELECT * 会阻止覆盖索引 → 只查需要的列
+```
