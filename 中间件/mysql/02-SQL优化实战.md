@@ -64,13 +64,37 @@ List<Order> orders = orderMapper.selectWithItems();  // 1 次 JOIN 查询
 
 **1.2 批量操作代替逐条执行**
 
+单行 INSERT 的开销拆解：
+
+```
+1. 客户端 → 服务端       网络往返       ~0.5ms
+2. 开启事务                             ~0.01ms
+3. 写 Redo Log（fsync）  顺序写         ~2~10ms  ← 主要瓶颈
+4. 写 Undo Log                          ~1ms
+5. 更新聚簇索引 B+ Tree   可能1次随机Io   ~1ms
+6. 更新二级索引 B+ Tree×N 可能N次随机Io   ~N ms
+7. 提交事务（fsync）                     ~2~10ms  ← 主要瓶颈
+8. 返回客户端            网络往返       ~0.5ms
+```
+
+> **一次插入，真正写数据只占 10%，90% 的时间花在事务、日志、网络上。** 其中 fsync 是最大瓶颈——每次强制把 Redo Log 刷到磁盘，机械盘约 5~10ms，SSD 约 1~2ms。
+
+批量插入快的本质：**把 N 次事务/日志/网络开销摊薄成 1 次。**
+
+| 开销项 | 单行 ×1000 | 批量 ×1 |
+|--------|-----------|---------|
+| 网络往返 | 1000 次 | 1 次 |
+| 事务开启/提交 | 1000 次 | 1 次 |
+| Redo Log fsync | 1000 次 | 1 次 |
+| 索引维护 | 1000 次（随机） | 1000 次（可排序后变顺序） |
+
 ```java
-// ❌ 逐条插入（1000 次网络往返 + 1000 次事务）
+// ❌ 逐条插入（1000 次网络往返 + 1000 次事务 + 1000 次 fsync）
 for (User user : users) {
     userMapper.insert(user);
 }
 
-// ✅ 批量插入（1 次网络往返 + 1 次事务）
+// ✅ 批量插入（1 次网络往返 + 1 次事务 + 1 次 fsync）
 userMapper.batchInsert(users);
 ```
 ```sql
@@ -81,6 +105,23 @@ INSERT INTO user (name, age) VALUES
 ```
 
 > MyBatis-Plus 自带 `saveBatch()`，注意设置合适的批次大小（建议 1000 条/批），避免拼接的 SQL 过大。
+
+大量数据导入时的额外优化：
+
+```sql
+-- 1. 先关闭非唯一索引，导完后一次性排序建索引（比逐行维护快很多）
+ALTER TABLE t DISABLE KEYS;
+-- 导入数据...
+ALTER TABLE t ENABLE KEYS;
+
+-- 2. 确认数据无重复时，跳过唯一索引和外键检查
+SET unique_checks = 0;
+SET foreign_key_checks = 0;
+
+-- 3. 用 LOAD DATA 替代 INSERT（最快，跳过 SQL 解析）
+LOAD DATA INFILE '/tmp/data.csv' INTO TABLE t
+FIELDS TERMINATED BY ',';
+```
 
 **1.3 避免循环中的重复查询**
 
@@ -142,29 +183,44 @@ MySQL 建立一条 TCP 连接的开销：三次握手 + TLS（可选）+ 认证�
 
 ### 三、事务优化
 
-**3.1 缩小事务范围**
+**3.1 为什么事务范围大是性能杀手**
+
+事务开启期间，InnoDB 会持有锁、维护 Undo Log 版本链、占用连接。事务越长：
+
+- **锁持有时间越长** → 其他事务等待 → 并发下降
+- **Undo Log 越长** → MVCC 回溯版本链越深 → 其他事务的快照读变慢
+- **连接占用越久** → 连接池压力大 → 高峰期可能耗尽
+
+> 核心原则：**事务只包裹必须一起成功的 DB 操作，其他全部移到事务外面。**
+
+**3.2 缩小事务范围**
 
 ```java
-// ❌ 事务中包含外部调用
+// ❌ 事务中包含外部调用（RPC、MQ、文件操作）
 @Transactional
 public void createOrder(OrderDTO dto) {
-    orderMapper.insert(order);          // DB 操作
-    inventoryService.deduct(dto);       // 可能是 RPC 调用，耗时不确定
-    sendMqMessage(order);               // 发消息，有网络 I/O
+    orderMapper.insert(order);          // DB 操作，~5ms
+    inventoryService.deduct(dto);       // RPC 调用，~200ms，耗时不确定
+    sendMqMessage(order);               // 发消息，~50ms
+    // 事务总耗时 ~255ms，锁和连接被白白占了 250ms
 }
 
-// ✅ 事务只包裹 DB 操作，外部调用后置
+// ✅ 事务只包裹 DB 操作，外部调用移到外面
 public void createOrder(OrderDTO dto) {
-    orderMapper.insert(order);          // 先写库
-    try {
-        inventoryService.deduct(dto);   // 再调外部服务
-    } catch (Exception e) {
-        // 补偿逻辑
-    }
+    // 外部调用放事务前
+    inventoryService.deduct(dto);
+
+    // 事务只包裹 DB 操作
+    orderMapper.insert(order);          // 不加 @Transactional，Spring 默认自动提交
+
+    // 外部调用放事务后
+    sendMqMessage(order);
 }
 ```
 
-**3.2 事务隔离级别选择**
+> **判断标准**：事务里只留"必须原子性的 DB 操作"。任何非 DB 操作（RPC、MQ、文件、计算）都应移出事务。
+
+**3.3 事务隔离级别选择**
 
 | 隔离级别 | 脏读 | 不可重复读 | 幻读 | 性能 | 场景 |
 |----------|------|------------|------|------|------|
@@ -173,12 +229,12 @@ public void createOrder(OrderDTO dto) {
 | **REPEATABLE READ** | 否 | 否 | 是 | 中 | MySQL 默认 |
 | **SERIALIZABLE** | 否 | 否 | 否 | 最低 | 强一致性需求 |
 
-> MySQL InnoDB 在 RR 级别下通过 Next-Key Lock 实际上解决了幻读。多数业务场景 RC 足够，并发性能更好。
+> RC 比 RR 性能更好的原因：RC 每次 SELECT 创建新 Read View，间隙锁范围更小，锁冲突更少。多数业务场景 RC 足够，阿里内部大量使用 RC。
 
-**3.3 事务传播行为注意事项**
+**3.4 事务传播行为注意事项**
 
 ```java
-// 常见陷阱：REQUIRES_NEW 悬挂事务
+// 常见陷阱：REQUIRES_NEW 产生悬挂事务
 @Transactional
 public void methodA() {
     userMapper.update(user);    // 在事务 A 中

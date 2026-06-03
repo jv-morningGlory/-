@@ -11,7 +11,8 @@
       "Bash(python gen_page_diagram.py)",
       "Bash(mv \"中间件/image/image1.png\" \"中间件/image/b+tree-index.png\")",
       "Bash(mv \"中间件/image/image2.png\" \"中间件/image/mvcc-version-chain.png\")",
-      "Bash(mv \"中间件/image/image3.png\" \"中间件/image/data-page-structure.png\")"
+      "Bash(mv \"中间件/image/image3.png\" \"中间件/image/data-page-structure.png\")",
+      "Bash(start \"\" \"c:\\\\Users\\\\heyoufeng\\\\Desktop\\\\随笔\\\\余弦相似度图解.html\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\heyoufeng\\Desktop\\随笔\\中间件\\mysql"

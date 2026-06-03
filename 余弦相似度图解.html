@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>余弦相似度图解</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            color: #eee;
+            font-family: "Microsoft YaHei", sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            background: #16213e;
+            border-radius: 16px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            max-width: 820px;
+        }
+        h1 {
+            text-align: center;
+            font-size: 1.4em;
+            margin-bottom: 6px;
+            color: #e94560;
+        }
+        .subtitle {
+            text-align: center;
+            font-size: 0.85em;
+            color: #888;
+            margin-bottom: 18px;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+            border-radius: 8px;
+        }
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 28px;
+            margin-top: 14px;
+            flex-wrap: wrap;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.95em;
+        }
+        .legend-dot {
+            width: 14px; height: 14px;
+            border-radius: 50%;
+        }
+        .info-box {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 16px;
+            flex-wrap: wrap;
+        }
+        .info-card {
+            background: #0f3460;
+            border-radius: 10px;
+            padding: 14px 20px;
+            text-align: center;
+            min-width: 180px;
+        }
+        .info-card .label { font-size: 0.8em; color: #aaa; }
+        .info-card .value { font-size: 1.3em; font-weight: bold; margin-top: 4px; }
+        .info-card .angle  { font-size: 0.85em; color: #ccc; margin-top: 2px; }
+        .info-card.good { border-left: 3px solid #4ecca3; }
+        .info-card.bad  { border-left: 3px solid #e94560; }
+        .formula-box {
+            background: #0f3460;
+            border: 1px solid #e94560;
+            border-radius: 12px;
+            padding: 18px 24px;
+            margin-bottom: 16px;
+            text-align: center;
+        }
+        .formula-box .main-formula {
+            font-size: 1.25em;
+            font-weight: bold;
+            color: #fff;
+            letter-spacing: 1px;
+        }
+        .formula-box .main-formula .hl { color: #e94560; }
+        .formula-box .main-formula .hl-g { color: #4ecca3; }
+        .formula-box .sub-formula {
+            font-size: 0.88em;
+            color: #aaa;
+            margin-top: 8px;
+            line-height: 1.8;
+        }
+        .formula-box .sub-formula span { margin: 0 4px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>余弦相似度 · 向量夹角图解</h1>
+    <p class="subtitle">cos(θ) = 1 方向相同 → 语义相近 &nbsp;|&nbsp; cos(θ) = -1 方向相反 → 语义相反</p>
+
+    <!-- 公式区 -->
+    <div class="formula-box">
+        <div class="main-formula">
+            <span class="hl">cos(θ)</span> = <span class="hl">A·B</span> / (<span class="hl">|A|</span> × <span class="hl">|B|</span>)
+            &nbsp;=&nbsp;
+            <span class="hl">x₁x₂ + y₁y₂</span> / (<span class="hl">√(x₁²+y₁²)</span> × <span class="hl">√(x₂²+y₂²)</span>)
+        </div>
+        <div class="sub-formula">
+            <span>cos(<span style="color:#4ecca3">A</span>,<span style="color:#f0c040">B</span>) = (4×3 + 3×4) / (5 × 5) = 24/25 = <b style="color:#4ecca3">0.96</b></span>
+            &nbsp;&nbsp;|&nbsp;&nbsp;
+            <span>cos(<span style="color:#4ecca3">A</span>,<span style="color:#e94560">C</span>) = (4×(-4) + 3×(-3)) / (5 × 5) = -25/25 = <b style="color:#e94560">-1.00</b></span>
+        </div>
+    </div>
+
+    <canvas id="canvas" width="760" height="640"></canvas>
+    <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#4ecca3;"></div> A(4, 3) — 基准向量</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f0c040;"></div> B(3, 4) — 夹角 ~16°</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#e94560;"></div> C(-4, -3) — 夹角 180°</div>
+    </div>
+    <div class="info-box">
+        <div class="info-card good">
+            <div class="label">cos(A, B)</div>
+            <div class="value">0.96</div>
+            <div class="angle">夹角 ≈ 16.3° → 语义相近</div>
+        </div>
+        <div class="info-card bad">
+            <div class="label">cos(A, C)</div>
+            <div class="value">-1.00</div>
+            <div class="angle">夹角 = 180° → 语义相反</div>
+        </div>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// 坐标系统：原点在画布中央偏下
+const OX = W / 2, OY = H * 0.55;
+const SCALE = 62;  // 每单位像素
+
+const points = [
+    { name: 'A', x: 4,  y: 3,  color: '#4ecca3' },
+    { name: 'B', x: 3,  y: 4,  color: '#f0c040' },
+    { name: 'C', x: -4, y: -3, color: '#e94560' },
+];
+
+function toScreen(px, py) {
+    return [OX + px * SCALE, OY - py * SCALE];
+}
+
+// ── 绘制网格 ──
+ctx.strokeStyle = '#2a2a4a';
+ctx.lineWidth = 0.6;
+for (let i = -6; i <= 6; i++) {
+    if (i === 0) continue;
+    let [sx] = toScreen(i, 0);
+    ctx.beginPath(); ctx.moveTo(sx, 20); ctx.lineTo(sx, H - 30); ctx.stroke();
+    let [, sy] = toScreen(0, i);
+    ctx.beginPath(); ctx.moveTo(30, sy); ctx.lineTo(W - 30, sy); ctx.stroke();
+}
+
+// ── 坐标轴 ──
+ctx.strokeStyle = '#555';
+ctx.lineWidth = 2;
+ctx.beginPath();
+ctx.moveTo(30, OY); ctx.lineTo(W - 30, OY);  // X轴
+ctx.moveTo(OX, H - 30); ctx.lineTo(OX, 25);  // Y轴
+ctx.stroke();
+
+// 轴箭头
+ctx.fillStyle = '#888';
+ctx.beginPath(); ctx.moveTo(W-30, OY); ctx.lineTo(W-38, OY-5); ctx.lineTo(W-38, OY+5); ctx.fill();
+ctx.beginPath(); ctx.moveTo(OX, 25); ctx.lineTo(OX-5, 33); ctx.lineTo(OX+5, 33); ctx.fill();
+
+// 轴标签
+ctx.fillStyle = '#aaa'; ctx.font = '13px "Microsoft YaHei"';
+ctx.textAlign = 'center';
+for (let i = -5; i <= 5; i++) {
+    if (i === 0) continue;
+    let [sx] = toScreen(i, 0);
+    ctx.fillText(i, sx, OY + 18);
+    let [, sy] = toScreen(0, i);
+    ctx.fillText(i, OX - 18, sy + 5);
+}
+ctx.fillText('x', W - 20, OY + 18);
+ctx.fillText('y', OX - 18, 18);
+ctx.fillText('O', OX - 14, OY + 18);
+
+// ── 绘制 A-B 夹角弧线 ──
+function drawAngle(from, to, color) {
+    const angleFrom = Math.atan2(from.y, from.x);
+    const angleTo   = Math.atan2(to.y, to.x);
+    const R = 70;
+
+    // 确保最小弧
+    let start = angleFrom, end = angleTo;
+    let diff = end - start;
+    while (diff >  Math.PI) { end -= 2 * Math.PI; diff = end - start; }
+    while (diff < -Math.PI) { end += 2 * Math.PI; diff = end - start; }
+
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.arc(OX, OY, R, start, end, diff < 0);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 标注角度
+    const mid = start + diff / 2;
+    const mx = OX + (R + 22) * Math.cos(mid);
+    const my = OY - (R + 22) * Math.sin(mid);
+    ctx.fillStyle = color;
+    ctx.font = 'bold 12px "Microsoft YaHei"';
+    ctx.textAlign = 'center';
+    const deg = Math.abs(Math.round(diff * 180 / Math.PI));
+    ctx.fillText(deg + '°', mx, my);
+}
+
+drawAngle(points[0], points[1], '#4ecca3');  // A-B
+
+// A-C 夹角（180°，画个半圆弧）
+ctx.strokeStyle = '#e94560';
+ctx.lineWidth = 2;
+ctx.setLineDash([5, 4]);
+ctx.beginPath();
+ctx.arc(OX, OY, 60, Math.atan2(3, 4), Math.atan2(-3, -4), false);
+ctx.stroke();
+ctx.setLineDash([]);
+ctx.fillStyle = '#e94560';
+ctx.fillText('180°', OX + 78, OY - 8);
+
+// ── 绘制向量（从原点出发的箭头） ──
+function drawVector(p, alpha) {
+    const [ex, ey] = toScreen(p.x, p.y);
+    const dx = ex - OX, dy = ey - OY;
+    const len = Math.sqrt(dx*dx + dy*dy);
+
+    // 向量线
+    ctx.strokeStyle = p.color;
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = 2.8;
+    ctx.beginPath();
+    ctx.moveTo(OX, OY);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    // 箭头
+    const arrowSize = 10;
+    const ux = dx / len, uy = dy / len;
+    const tip = Math.min(len - 10, len);
+    const tipX = OX + ux * tip, tipY = OY + uy * tip;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX - arrowSize * ux + arrowSize * 0.4 * uy,
+               tipY - arrowSize * uy - arrowSize * 0.4 * ux);
+    ctx.lineTo(tipX - arrowSize * ux - arrowSize * 0.4 * uy,
+               tipY - arrowSize * uy + arrowSize * 0.4 * ux);
+    ctx.closePath();
+    ctx.fill();
+
+    // 端点圆
+    ctx.beginPath();
+    ctx.arc(ex, ey, 6, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // 标签
+    const lblX = ex + (p.x >= 0 ? 22 : -22);
+    const lblY = ey - 14;
+    ctx.fillStyle = p.color;
+    ctx.font = 'bold 15px "Microsoft YaHei"';
+    ctx.textAlign = p.x >= 0 ? 'left' : 'right';
+    ctx.fillText(`${p.name}(${p.x}, ${p.y})`, lblX, lblY);
+}
+
+drawVector(points[2], 0.35);  // C 半透明（先画，在底层）
+drawVector(points[0], 1.0);   // A
+drawVector(points[1], 0.75);  // B
+
+// ── 底部公式 ──
+ctx.fillStyle = '#ccc';
+ctx.font = '14px "Microsoft YaHei"';
+ctx.textAlign = 'center';
+ctx.fillText('cos(A,B) = (4×3 + 3×4) / (5 × 5) = 24/25 = 0.96   →   夹角 ≈ 16.3°', OX, H - 8);
+
+</script>
+</body>
+</html>
