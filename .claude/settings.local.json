@@ -12,10 +12,15 @@
       "Bash(mv \"中间件/image/image1.png\" \"中间件/image/b+tree-index.png\")",
       "Bash(mv \"中间件/image/image2.png\" \"中间件/image/mvcc-version-chain.png\")",
       "Bash(mv \"中间件/image/image3.png\" \"中间件/image/data-page-structure.png\")",
-      "Bash(start \"\" \"c:\\\\Users\\\\heyoufeng\\\\Desktop\\\\随笔\\\\余弦相似度图解.html\")"
+      "Bash(start \"\" \"c:\\\\Users\\\\heyoufeng\\\\Desktop\\\\随笔\\\\余弦相似度图解.html\")",
+      "Bash(code --version)",
+      "Bash(code --uninstall-extension bierner.markdown-mermaid)",
+      "Bash(code --uninstall-extension yzhang.markdown-all-in-one)",
+      "Bash(rm -rf \"c:/Users/heyoufeng/.vscode/extensions/bierner.markdown-mermaid-1.32.1\")"
     ],
     "additionalDirectories": [
-      "c:\\Users\\heyoufeng\\Desktop\\随笔\\中间件\\mysql"
+      "c:\\Users\\heyoufeng\\Desktop\\随笔\\中间件\\mysql",
+      "c:\\Users\\heyoufeng\\.vscode\\extensions\\bierner.markdown-mermaid-1.32.1"
     ]
   }
 }

@@ -1,11 +1,11 @@
-# RAG（检索增强生成）原理与实践
+# RAG（检索增强生成）原理与实战
 
-> 目标：理解 RAG 完整链路、Chunk 切分策略、能用 Java 跑通一个示例
+> 目标：理解 RAG 完整链路、Chunk 切分策略、用 Java + 智谱 GLM 跑通一个完整 Demo
 > 前置：理解 Embedding 和余弦相似度 → [AI学习路线 2.2](AI学习路线.md)
 
 ---
 
-## 什么是 RAG
+## 一、什么是 RAG
 
 ### RAG 到底是什么
 
@@ -89,13 +89,7 @@ RAG 方式：用户问题 → 检索相关文档 → 文档 + 问题 → LLM →
 
 ---
 
-## 一、RAG 完整链路 — 数据怎么流
-
-### 核心问题
-
-LLM 不知道你公司内部文档的内容（训练数据里没有），怎么让它基于你的文档回答问题？
-
-**答：** 把相关文档片段"塞进" Prompt 里，让 LLM 看着文档回答。RAG 就是自动化做这件事的流程。
+## 二、RAG 完整链路 — 数据怎么流
 
 ### 链路全景图
 
@@ -123,7 +117,7 @@ LLM 不知道你公司内部文档的内容（训练数据里没有），怎么�
 | 环节 | 做了什么 | 你该关注什么 |
 |------|---------|-------------|
 | ① 文档加载 | 读取 PDF/Word/HTML/TXT，提取纯文本 | 不同格式提取质量不同，PDF 表格容易乱 |
-| ② 切分 | 把长文档切成小段（Chunk） | **RAG 效果的核心变量**，见第二章 |
+| ② 切分 | 把长文档切成小段（Chunk） | **RAG 效果的核心变量**，见第三章 |
 | ③ Embedding | 每段文本转成向量 | 和查询必须用同一个模型 |
 | ④ 存储 | 向量 + 原始文本一起存 | 最终给 LLM 看的是原始文本，向量只用来搜 |
 | ⑤ 查询向量化 | 用户问题也转成向量 | 和入库用同一个 Embedding 模型 |
@@ -133,7 +127,7 @@ LLM 不知道你公司内部文档的内容（训练数据里没有），怎么�
 
 > **关键认知：** RAG 的本质是把"检索"和"生成"拆开。检索负责找到相关材料，生成负责用材料写出好答案。两个环节各司其职。
 
-**Top-K 是什么：**
+### Top-K 是什么
 
 K 是一个数字，表示"从向量库里取相似度最高的前 K 个 Chunk"。
 
@@ -159,7 +153,7 @@ K 是一个数字，表示"从向量库里取相似度最高的前 K 个 Chunk"�
 
 ---
 
-## 二、Chunk 切分策略 — 为什么搜不准往往是切的问题
+## 三、Chunk 切分策略 — 为什么搜不准往往是切的问题
 
 ### 一个直观例子
 
@@ -226,98 +220,3 @@ Chunk（文本块）= 把一篇长文档按一定规则切成 N 个小段，每�
 
 ---
 
-## 三、LangChain4j RAG 示例 — 用 Java 把链路串起来
-
-### 跑通后你要能回答三个问题
-
-1. 我的文档被切成了多少段？每段大概多长？
-2. 用户问某问题，检索返回了哪几段？为什么是这几段？
-3. LLM 最终答案引用了原文的哪些内容？
-
-### 核心代码结构
-
-```java
-// 1. 加载文档
-Document document = FileSystemDocumentLoader.loadDocument("docs/员工手册.pdf");
-
-// 2. 切分文档（这里是关键 —— 选什么切分策略）
-DocumentSplitter splitter = DocumentSplitters.recursive(
-    500,   // Chunk 大小（字符数）
-    50     // 重叠大小
-);
-List<TextSegment> segments = splitter.split(document);
-
-// 3. Embedding + 存储（一步完成）
-EmbeddingStore<TextSegment> embeddingStore =
-    PgVectorEmbeddingStore.builder()
-        .host("localhost").port(5432)
-        .database("rag_demo")
-        .dimension(1536)    // 必须和 Embedding 模型维度一致
-        .build();
-
-EmbeddingModel embeddingModel = OpenAIEmbeddingModel.builder()
-    .apiKey(System.getenv("OPENAI_API_KEY"))
-    .modelName("text-embedding-3-small")
-    .build();
-
-// 每个 Chunk 转向量，存库
-for (TextSegment seg : segments) {
-    Embedding emb = embeddingModel.embed(seg.text()).content();
-    embeddingStore.add(emb, seg);
-}
-
-// 4. 检索 —— 用户提问来了
-String question = "入职5年的员工有多少天年假？";
-Embedding questionEmb = embeddingModel.embed(question).content();
-
-// 用余弦相似度找最相似的 Chunk
-List<EmbeddingMatch<TextSegment>> relevant =
-    embeddingStore.findRelevant(questionEmb, 5);  // Top-5
-
-// 打印检索结果（这是理解效果的关键）
-for (EmbeddingMatch<TextSegment> match : relevant) {
-    System.out.printf("相似度: %.3f | 内容: %s%n",
-        match.score(), match.embedded().text());
-}
-
-// 5. 拼 Prompt + 调 LLM
-String context = relevant.stream()
-    .map(m -> m.embedded().text())
-    .collect(Collectors.joining("\n\n"));
-
-String prompt = """
-    基于以下文档内容回答问题。如果文档中没有相关信息，请明确说"文档中未找到"。
-    
-    【参考文档】
-    %s
-    
-    【用户问题】
-    %s
-    """.formatted(context, question);
-
-String answer = chatModel.generate(prompt);
-```
-
-### 跑通后重点看三个输出
-
-1. **切分结果** — `segments.size()` 是多少？打印前几个 Chunk 的内容，看切得是否自然
-2. **检索相似度** — 每个 `match.score()` 的值。0.8 以上算强相关，0.5 以下基本不相关
-3. **最终答案** — LLM 的回答是否准确引用了文档内容？有没有编造？
-
----
-
-## 四、常见问题速查
-
-| 问题 | 可能原因 | 排查方向 |
-|------|---------|---------|
-| 检索结果不相关 | Embedding 模型不匹配 | 检查和入库是否同一个模型 |
-| 答案缺关键信息 | Chunk 切太小，上下文断裂 | 增大 Chunk 或加重叠 |
-| 答案有很多无关内容 | Top-K 太大，噪声多 | 减小 K，或加相似度阈值过滤 |
-| LLM 编造不存在的内容 | Prompt 没约束 | Prompt 里明确要求"文档中没有就说不知道" |
-| 回答方向偏了 | 检索到的 Chunk 本身就不对 | 检查切分质量，或用更好的 Embedding 模型 |
-
----
-
-## 学习达成标准
-
-> 不看代码，能从头到尾画出 RAG 的数据流图，说出每个环节做了什么、哪里容易出问题，就说明你真正理解了。
