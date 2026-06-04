@@ -464,17 +464,385 @@
 >
 > 变化的原因：`spring.factories` 一个文件塞了太多东西（自动配置、Initializer、Listener 全混在一起），3.x 拆开更清晰，加载也更快。如果自研了 Starter，升级 3.x 时要迁移这个文件。
 ### 16. `@ConditionalOnClass`、`@ConditionalOnMissingBean`、`@ConditionalOnProperty` 这些条件注解在自动装配中怎么协作的？
+
+> 三个注解各管一层过滤：
+>
+> | 注解 | 判断什么 | 什么时候生效 |
+> |---|---|---|
+> | **`@ConditionalOnClass`** | classpath 里有没有这个类 | 引入了对应依赖才生效 |
+> | **`@ConditionalOnMissingBean`** | 容器里有没有这个 Bean | 用户没自定义才生效，避免覆盖用户的 |
+> | **`@ConditionalOnProperty`** | 配置文件里某个值是什么 | 配置开关控制是否生效 |
+>
+> ```java
+> @AutoConfiguration
+> @ConditionalOnClass(RedisOperations.class)   // ① 引了 redis 依赖才往下走
+> @EnableConfigurationProperties(RedisProperties.class)
+> public class RedisAutoConfiguration {
+>
+>     @Bean
+>     @ConditionalOnMissingBean(name = "redisTemplate")  // ② 用户没自定义才创建
+>     public RedisTemplate<String, Object> redisTemplate(
+>             RedisConnectionFactory factory) {
+>         RedisTemplate<String, Object> template = new RedisTemplate<>();
+>         template.setConnectionFactory(factory);
+>         return template;
+>     }
+> }
+> ```
+>
+> **三层过滤流程：**
+>
+> ```
+> 100+ 个候选自动配置类
+>     │
+>     ▼ @ConditionalOnClass（第一道门）
+>     │  没引入 spring-data-redis → RedisAutoConfiguration 淘汰
+>     │  没引入 mybatis → MybatisAutoConfiguration 淘汰
+>     │
+>     ▼ @ConditionalOnMissingBean（第二道门）
+>     │  用户自己定义了 DataSource → 自动配置的 DataSource 不创建
+>     │  用户自己定义了 RedisTemplate → 自动配置的 RedisTemplate 不创建
+>     │
+>     ▼ @ConditionalOnProperty（第三道门）
+>        配置了 enabled=false → 不加载
+>        最终真正生效的配置类
+> ```
+>
+> **核心思想：** `@ConditionalOnClass` 管"你有没有这个能力"，`@ConditionalOnMissingBean` 管"用户有没有自己搞"，`@ConditionalOnProperty` 管"配置开关"。三层过滤保证只加载真正需要的。
 ### 17. 如何排除某个不想用的自动配置？比如不想用默认的 DataSource？
+
+> 三种方式：
+>
+> ```java
+> // ① @SpringBootApplication 注解上排除（最常用）
+> @SpringBootApplication(exclude = {
+>     DataSourceAutoConfiguration.class,
+>     DataSourceTransactionManagerAutoConfiguration.class
+> })
+> public class MyApp { }
+>
+> // ② @EnableAutoConfiguration 上排除（拆开写时用）
+> @EnableAutoConfiguration(exclude = {DataSourceAutoConfiguration.class})
+> ```
+>
+> ```yaml
+> # ③ 配置文件排除（不用改代码，不同环境排除不同的）
+> spring:
+>   autoconfigure:
+>     exclude:
+>       - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+>       - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
+> ```
+>
+> | 方式 | 优点 | 缺点 |
+> |---|---|---|
+> | `@SpringBootApplication(exclude)` | 最常用，一眼能看到 | 改了要重新编译 |
+> | 配置文件 | 不用改代码，不同环境排除不同的 | 类名太长 |
+> | `@EnableAutoConfiguration(exclude)` | 注解拆开写时用 | 拆开写的情况少 |
+>
+> **实际项目中最常用第一种**。
 ### 18. 如果你自己封装一个公司内部的 Starter，步骤是怎样的？需要注意什么？
-### 19. 自定义 Starter 时，`xxx-spring-boot-starter` 和 `xxx-spring-boot-autoconfigure` 两个模块分别放什么？
-### 20. Starter 中的自动配置类和用户自己定义的 Bean，谁的优先级更高？如果用户想覆盖 Starter 的默认 Bean 怎么做？
-### 21. 你在项目中实际封装过哪些 Starter？解决了什么问题？
+
+> **① 建两个模块（官方推荐结构）：**
+>
+> ```
+> xxx-spring-boot-starter           ← 空壳模块，只做依赖聚合
+>   └── pom.xml（引入 autoconfigure + 第三方依赖）
+>
+> xxx-spring-boot-autoconfigure     ← 核心逻辑
+>   ├── XxxProperties.java          ← 配置属性类
+>   ├── XxxAutoConfiguration.java   ← 自动配置类
+>   ├── XxxService.java             ← 核心功能
+>   └── META-INF/spring/...AutoConfiguration.imports
+> ```
+>
+> **② 核心代码：**
+>
+> ```java
+> // 配置属性类
+> @ConfigurationProperties(prefix = "xxx.sms")
+> public class SmsProperties {
+>     private String url;
+>     private String appKey;
+>     private String appSecret;
+>     // getter/setter
+> }
+>
+> // 自动配置类
+> @AutoConfiguration
+> @ConditionalOnClass(SmsService.class)
+> @EnableConfigurationProperties(SmsProperties.class)
+> public class SmsAutoConfiguration {
+>
+>     @Bean
+>     @ConditionalOnMissingBean
+>     public SmsService smsService(SmsProperties props) {
+>         return new SmsService(props.getUrl(), props.getAppKey(), props.getAppSecret());
+>     }
+> }
+> ```
+>
+> ```properties
+> # 3.x：META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+> com.company.sms.autoconfigure.SmsAutoConfiguration
+> ```
+>
+> ```xml
+> <!-- starter 模块只做依赖聚合 -->
+> <dependencies>
+>     <dependency>
+>         <groupId>com.company</groupId>
+>         <artifactId>xxx-spring-boot-autoconfigure</artifactId>
+>     </dependency>
+> </dependencies>
+> ```
+>
+> **③ 使用方引入后配一下就能用：**
+>
+> ```xml
+> <dependency>
+>     <groupId>com.company</groupId>
+>     <artifactId>xxx-spring-boot-starter</artifactId>
+> </dependency>
+> ```
+>
+> **需要注意：**
+>
+> | 注意点 | 说明 |
+> |---|---|
+> | 业务逻辑放 autoconfigure，不放 starter | starter 只做依赖聚合 |
+> | 必须加 `@ConditionalOnMissingBean` | 否则会覆盖用户自定义的 Bean |
+> | 配置类用 `@ConfigurationProperties` | 方便用户批量配置，不用 `@Value` |
+> | 提供默认值 | 用户不配也能用 |
+> | 不要用 `@ComponentScan` | 通过配置文件注册，避免和用户项目冲突 |
+### 19. Starter 中的自动配置类和用户自己定义的 Bean，谁的优先级更高？如果用户想覆盖 Starter 的默认 Bean 怎么做？
+
+> **用户的 Bean 优先级更高。** Spring Boot 设计原则：用户定义的优先，自动配置的后备。
+>
+> 原因是自动配置类的 `@Bean` 方法都加了 `@ConditionalOnMissingBean`，容器里已有同类型 Bean 就不创建。
+>
+> ```java
+> @AutoConfiguration
+> public class RedisAutoConfiguration {
+>     @Bean
+>     @ConditionalOnMissingBean(name = "redisTemplate")  // 容器里没有才创建
+>     public RedisTemplate<String, Object> redisTemplate() {
+>         return new RedisTemplate<>();
+>     }
+> }
+> ```
+>
+> **用户覆盖 Starter 默认 Bean 的三种方式：**
+>
+> ```java
+> // 方式一：自己定义同类型 Bean（最常用）
+> @Configuration
+> public class MyRedisConfig {
+>     @Bean
+>     public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory factory) {
+>         RedisTemplate<String, Object> template = new RedisTemplate<>();
+>         template.setConnectionFactory(factory);
+>         template.setKeySerializer(new StringRedisSerializer());
+>         return template;
+>     }
+> }
+> ```
+>
+> ```yaml
+> # 方式二：通过配置文件覆盖属性
+> spring:
+>   data:
+>     redis:
+>       host: 192.168.1.100
+> ```
+>
+> ```java
+> // 方式三：排除整个自动配置类
+> @SpringBootApplication(exclude = {RedisAutoConfiguration.class})
+> ```
+### 20. 你在项目中实际封装过哪些 Starter？解决了什么问题？
+
+> 项目中用过集团内部封装的 **OpenAPI 调用 Starter**。
+>
+> **背景：** 集团内部服务之间通过第三方 OpenAPI 平台进行调用，每次调用都要处理签名、鉴权、加密、重试、日志记录等通用逻辑，每个服务都重复写一遍。
+>
+> **集团封装的 Starter 做了什么：**
+> - 统一的签名算法、鉴权令牌获取、请求加密/解密
+> - 统一的异常处理、重试机制、调用日志记录
+> - 通过 `@ConfigurationProperties` 暴露配置（appId、appSecret、平台地址等）
+> - 提供自动注册的 `OpenApiClient` Bean
+>
+> ```xml
+> <!-- 引入 Starter -->
+> <dependency>
+>     <groupId>com.group</groupId>
+>     <artifactId>openapi-spring-boot-starter</artifactId>
+> </dependency>
+> ```
+>
+> ```yaml
+> # 配置应用信息
+> openapi:
+>   app-id: order-service
+>   app-secret: xxx
+>   server-url: https://openapi.group.com
+> ```
+>
+> ```java
+> // 直接注入使用，不用关心签名、鉴权等细节
+> @Service
+> public class OrderService {
+>     @Autowired
+>     private OpenApiClient openApiClient;
+>
+>     public UserInfo getUser(String userId) {
+>         return openApiClient.invoke("user-service", "/api/user/" + userId, UserInfo.class);
+>     }
+> }
+> ```
+>
+> **解决的问题：** 各业务服务不用再重复写调用 OpenAPI 平台的通用逻辑，引入 Starter + 配置即可使用，减少了大量重复代码和维护成本。
 
 ## 三、IoC 容器与 Bean 生命周期（8 题）
 
 ### 22. IoC（控制反转）你是怎么理解的？它解决了什么问题？
+
+> **IoC（Inversion of Control）**——对象的创建和依赖管理不由你自己 new，而是交给 Spring 容器来管。"控制"指的是对象创建和依赖关系的管理权，以前自己 new（正转），现在交给容器（反转）。
+>
+> ```java
+> // 没有 IoC：自己 new，对象之间硬绑死
+> public class OrderService {
+>     private UserService userService = new UserService();     // 换实现要改代码
+>     private PayService payService = new AliPayService();     // 换微信支付要改代码
+> }
+>
+> // 有 IoC：不 new，让 Spring 注入
+> public class OrderService {
+>     private final UserService userService;   // Spring 负责创建和注入
+>     private final PayService payService;     // 换实现只改配置或加个 @Bean
+>
+>     public OrderService(UserService userService, PayService payService) {
+>         this.userService = userService;
+>         this.payService = payService;
+>     }
+> }
+> ```
+>
+> | 没有 IoC | 有 IoC |
+> |---|---|
+> | 对象之间 new 来 new 去，耦合死了 | 只声明依赖，不管谁创建的 |
+> | 换实现要改业务代码 | 加个 `@Bean` 或换个 `@Qualifier` 就行 |
+> | 循环依赖自己解决不了 | Spring 三级缓存自动处理 |
+> | 单例、多例自己管理 | `@Scope` 一行搞定 |
+> | 事务、AOP 要自己写模板代码 | 注解一加，Spring 自动处理 |
+>
+> ```java
+> // 实际例子：换支付方式只改 @Qualifier，业务代码不用动
+> @Service
+> public class OrderService {
+>     private final PayService payService;
+>
+>     public OrderService(@Qualifier("wechatPay") PayService payService) {
+>         this.payService = payService;
+>     }
+> }
+> ```
+>
+> **面试答法：** IoC 就是把对象的创建和依赖管理从代码里剥离出来交给 Spring 容器。解决了对象之间的硬耦合问题——你只声明需要什么，Spring 负责创建和注入。换个实现改配置就行，不用改业务代码。
+
 ### 23. Spring 容器启动时，Bean 的完整生命周期是怎样的？每一步都在做什么？
+
+> **核心四阶段：实例化 → 属性注入 → 初始化 → 销毁。**
+>
+> ```
+> ① 实例化（new）
+>    ↓
+> ② 属性注入（@Autowired、setter）
+>    ↓
+> ③ BeanNameAware / BeanFactoryAware / ApplicationContextAware 回调
+>    ↓
+> ④ BeanPostProcessor.postProcessBeforeInitialization()  ← 前置处理
+>    ↓
+> ⑤ @PostConstruct 方法（InitializingBean.afterPropertiesSet）  ← 初始化
+>    ↓
+> ⑥ init-method（自定义初始化方法）
+>    ↓
+> ⑦ BeanPostProcessor.postProcessAfterInitialization()  ← 后置处理（AOP 代理在这里生成）
+>    ↓
+> ⑧ Bean 就绪，可以使用
+>    ↓
+> ⑨ @PreDestroy 方法（DisposableBean.destroy）  ← 销毁
+>    ↓
+> ⑩ destroy-method（自定义销毁方法）
+> ```
+>
+> **各阶段在做什么：**
+>
+> | 阶段 | 做了什么 | 你能插手的地方 |
+> |---|---|---|
+> | **实例化** | 反射调用构造器，创建对象（还没设属性） | 构造器注入在这步完成 |
+> | **属性注入** | 填充 `@Autowired`、`@Value`、setter 的依赖 | — |
+> | **Aware 回调** | 让 Bean 拿到容器的一些信息（自己的名字、ApplicationContext 等） | 实现 `ApplicationContextAware` 接口 |
+> | **前置处理** | `BeanPostProcessor` 的 `before` 方法 | — |
+> | **初始化** | 调用 `@PostConstruct` → `afterPropertiesSet()` → `init-method` | `@PostConstruct` 做初始化逻辑 |
+> | **后置处理** | `BeanPostProcessor` 的 `after` 方法 | **AOP 代理在这步生成** |
+> | **销毁** | 调用 `@PreDestroy` → `destroy()` → `destroy-method` | `@PreDestroy` 释放资源 |
+>
+> ```java
+> @Component
+> public class OrderService implements ApplicationContextAware, InitializingBean, DisposableBean {
+>
+>     @Autowired
+>     private UserService userService;  // ② 属性注入
+>
+>     private ApplicationContext ctx;
+>
+>     @Override
+>     public void setApplicationContext(ApplicationContext ctx) {  // ③ Aware 回调
+>         this.ctx = ctx;
+>     }
+>
+>     @PostConstruct
+>     public void init() {  // ⑤ 初始化
+>         System.out.println("Bean 初始化完成");
+>     }
+>
+>     @Override
+>     public void afterPropertiesSet() {  // ⑤ InitializingBean 接口方法
+>         System.out.println("属性都设好了");
+>     }
+>
+>     @PreDestroy
+>     public void cleanup() {  // ⑨ 销毁前释放资源
+>         System.out.println("释放资源");
+>     }
+>
+>     @Override
+>     public void destroy() {  // ⑨ DisposableBean 接口方法
+>         System.out.println("Bean 销毁");
+>     }
+> }
+> ```
+>
+> **面试答法：** 四大阶段——实例化 → 属性注入 → 初始化 → 销毁。初始化阶段依次调用 `@PostConstruct` → `afterPropertiesSet()` → `init-method`，销毁阶段依次调用 `@PreDestroy` → `destroy()` → `destroy-method`。**AOP 代理在后置处理（`postProcessAfterInitialization`）那步生成。**
 ### 24. `BeanFactory` 和 `ApplicationContext` 的区别是什么？你平时用的是哪个？
+
+> **`BeanFactory`** 是 Spring 最底层的容器接口，只提供最基本的 Bean 管理。**`ApplicationContext`** 是它的子接口，在基础上加了一堆高级功能。
+>
+> | 功能 | BeanFactory | ApplicationContext |
+> |---|---|---|
+> | **Bean 的创建和获取** | ✅ | ✅ |
+> | **BeanPostProcessor 自动注册** | ❌ 要手动注册 | ✅ 自动识别并注册 |
+> | **BeanFactoryPostProcessor 自动注册** | ❌ 手动 | ✅ 自动 |
+> | **国际化（i18n）** | ❌ | ✅ |
+> | **事件发布机制** | ❌ | ✅ `publishEvent()` |
+> | **AOP 支持** | ❌ 要手动配置 | ✅ 自动识别 `@Aspect` |
+> | **自动配置（Spring Boot）** | ❌ | ✅ |
+> | **Bean 获取时机** | **懒加载**，`getBean()` 时才创建 | **预加载**，启动时创建所有单例 |
+>
+> **平时用的是 `ApplicationContext`。** Spring Boot 的 `SpringApplication.run()` 创建的就是 `ApplicationContext`，几乎不会直接用到 `BeanFactory`。
+>
+> **面试答法：** `ApplicationContext` 是 `BeanFactory` 的子接口，加了事件发布、AOP、国际化、自动配置等功能。`BeanFactory` 懒加载，`ApplicationContext` 预加载。平时用的全是 `ApplicationContext`，Spring Boot 启动创建的就是它。
 ### 25. `@Component` 和 `@Bean` 的区别是什么？什么场景用 `@Bean`？
 ### 26. Bean 的作用域有哪些？`singleton`、`prototype`、`request`、`session` 分别在什么场景使用？
 ### 27. 如果一个 `prototype` 作用域的 Bean 被注入到 `singleton` 的 Bean 中，会发生什么？怎么解决？
