@@ -7,7 +7,7 @@
 
 ## 一、Spring Boot 基础与核心原理（13 题）
 
-1. Spring Boot 相比传统 Spring 框架做了什么改进？为什么现在大家都在用？
+### 1. Spring Boot 相比传统 Spring 框架做了什么改进？为什么现在大家都在用？
 
 > **第一，内嵌容器，开箱即用。** 传统 Spring 需要单独部署 Tomcat，打成 war 包丢到容器里跑。Spring Boot 直接把 Tomcat/Jetty/Undertow 内嵌进了 jar 包，一个 `java -jar` 就能启动，开发、测试、部署的体验都极大简化了。
 >
@@ -15,7 +15,7 @@
 >
 > **第三，约定优于配置。** 这是 Spring Boot 最核心的设计理念。它给几乎所有常见场景都预设了合理的默认值——端口默认 8080、数据源默认 HikariCP、静态资源默认放 `static` 目录。你只有不按约定来的时候才需要手动配置，90% 的情况零配置就能跑起来，极大减少了配置文件的体积和维护成本。
 
-2. `@SpringBootApplication` 注解内部由哪几个注解构成？各自负责什么？
+### 2. `@SpringBootApplication` 注解内部由哪几个注解构成？各自负责什么？
 
 > `@SpringBootApplication` 是一个组合注解，由三个核心注解构成：
 >
@@ -27,7 +27,7 @@
 >
 > > **追问预警：** "那我想扫描别的包怎么办？" → 用 `@SpringBootApplication(scanBasePackages = "com.xxx")` 或在启动类上额外加 `@ComponentScan("com.xxx")` 指定扫描路径。
 
-3. Spring Boot 的约定大于配置体现在哪些地方？举几个实际例子。
+### 3. Spring Boot 的约定大于配置体现在哪些地方？举几个实际例子。
 
 > 约定优于配置不是"不用配置"，而是**你不说话的时候，我按规矩来；你有意见的时候，我按你说的改。** 体现在这几个层面：
 >
@@ -41,7 +41,7 @@
 >
 > **⑤ 内嵌容器。** 约定用 Tomcat，端口 8080。想换 Undertow 就 exclude Tomcat 再引入 Undertow；想换端口就 `server.port=9090`——不配，就按约定来。
 
-4. Spring Boot 的启动流程是怎样的？`SpringApplication.run()` 内部做了哪些关键步骤？
+### 4. Spring Boot 的启动流程是怎样的？`SpringApplication.run()` 内部做了哪些关键步骤？
 
 > 一句话概括：**判断应用类型 → 加载扩展 → 准备环境 → 创建容器 → `refresh()`（自动配置生效 + Bean 实例化）→ 回调 Runner。**
 >
@@ -55,7 +55,17 @@
 >
 > **阶段二：环境准备**
 >
-> **③ 准备 Environment。** 创建 `Environment` 对象，加载所有配置源——命令行参数、环境变量、`application.yml`、`application.properties`，按优先级合并。
+> **③ 准备 Environment。** 创建 `Environment` 对象，加载所有配置源并按优先级合并。优先级从高到低：
+>
+> | 优先级 | 来源 | 示例 |
+> |--------|------|------|
+> | 1（最高） | 命令行参数 | `--server.port=9999` |
+> | 2 | JVM 系统属性（`-D`） | `-Dserver.port=8081` |
+> | 3 | OS 环境变量 | `SERVER_PORT=8081` |
+> | 4 | `application-{profile}.yml` | `application-prod.yml` |
+> | 5（最低） | `application.yml` | 默认配置文件 |
+>
+> 规律：**越靠近运行时的优先级越高**（命令行 `--` > JVM `-D` > 环境变量 > profile 配置 > 默认配置）。同一 key 被多处配置时，高优先级覆盖低优先级。
 >
 > **④ 打印 Banner + 创建容器。** 就是启动时那个 Spring 大字，同时创建一个空的 `ApplicationContext`。
 >
@@ -71,143 +81,509 @@
 >
 > **阶段四：收尾**
 >
-> **⑦ 回调 Runner。** 容器启动完成后，依次执行 `CommandLineRunner` 和 `ApplicationRunner`。常用于启动后初始化数据、预热缓存、检查依赖服务健康状态等。
+> **⑦ 回调 Runner。** 容器启动完成后，执行 `CommandLineRunner` 和 `ApplicationRunner`。常用于启动后初始化数据、预热缓存、检查依赖服务等。
 
-5. Spring Boot 的 banner 是怎么加载的？如何自定义？
-6. Spring Boot 为什么能通过 main 方法直接启动，不需要外部 Tomcat？
-7. `CommandLineRunner` 和 `ApplicationRunner` 的区别是什么？你在项目中用过吗？
-8. Spring Boot 如何实现热部署？`spring-boot-devtools` 的原理是什么？
-9.  Spring Boot 有几种注入 Bean 的方式？各有什么优缺点？
-10. Spring Boot 中 `@ConfigurationProperties` 和 `@Value` 的区别是什么？什么时候用哪个？
-11. Spring Boot 支持哪些配置文件格式？`.properties` 和 `.yml` 加载优先级是怎样的？
-12. Spring Boot 多环境配置怎么实现？你在项目中怎么切换 dev / test / prod 环境？
-13. Spring Boot 2.x 和 3.x 有哪些重要变化？升级时需要注意什么？
+
+
+### 5. Spring Boot 为什么能通过 main 方法直接启动，不需要外部 Tomcat？
+
+> 传统 Spring 需要打成 war 包部署到外部 Tomcat，Tomcat 负责启动 Servlet 容器、加载应用。Spring Boot 不需要这些，因为它**把容器内嵌进了 jar 包**。
+>
+> **核心原理：**
+>
+> **① 内嵌 Servlet 容器。** 引入 `spring-boot-starter-web` 后，依赖里自带了 Tomcat 的 jar 包（`spring-boot-starter-tomcat`）。Spring Boot 启动时不是等外部容器来加载你，而是自己 new 一个 Tomcat 实例出来，把 DispatcherServlet 注册上去，监听端口——整个过程都在 JVM 内部完成。
+>
+> **② `main()` 方法就是入口。** `SpringApplication.run()` 做了两件事：创建 Spring 容器（`ApplicationContext`）+ 启动内嵌 Tomcat。Tomcat 作为 Spring Bean 的一部分被管理和启动，不需要外部进程。
+>
+> **③ 打包方式。** 用 `spring-boot-maven-plugin` 打成可执行 jar，里面通过 `MANIFEST.MF` 指定 `Main-Class` 为 `JarLauncher`，它负责加载嵌套 jar 里的依赖，然后调用你的 `main()` 方法。所以一个 `java -jar app.jar` 就能跑起来。
+>
+> | | 传统 Spring | Spring Boot |
+> |---|---|---|
+> | **打包方式** | war 包 | 可执行 jar 包 |
+> | **容器** | 外部 Tomcat（独立进程） | 内嵌 Tomcat（同一 JVM） |
+> | **启动方式** | 部署到 Tomcat，Tomcat 启动应用 | `java -jar` 直接启动 |
+> | **换容器** | 换 Tomcat 版本或换 Jetty | exclude Tomcat，引入 Undertow/Jetty 依赖即可 |
+>
+> ```xml
+> <!-- 想换 Undertow，排除默认 Tomcat -->
+> <dependency>
+>     <groupId>org.springframework.boot</groupId>
+>     <artifactId>spring-boot-starter-web</artifactId>
+>     <exclusions>
+>         <exclusion>
+>             <groupId>org.springframework.boot</groupId>
+>             <artifactId>spring-boot-starter-tomcat</artifactId>
+>         </exclusion>
+>     </exclusions>
+> </dependency>
+> <dependency>
+>     <groupId>org.springframework.boot</groupId>
+>     <artifactId>spring-boot-starter-undertow</artifactId>
+> </dependency>
+> ```
+
+### 6. `CommandLineRunner` 和 `ApplicationRunner` 的区别是什么？你在项目中用过吗？
+
+> **相同点：** 执行时机一样，都在容器启动完成后（所有 Bean 创建好、`refresh()` 结束）执行。常用于预热缓存、初始化数据、启动后检查依赖服务等。
+>
+> **区别：参数类型不同。** 假设命令行为 `java -jar app.jar --name=张三 hello 123`：
+>
+> | | CommandLineRunner | ApplicationRunner |
+> |---|---|---|
+> | **收到的参数** | `String... args`（原始字符串数组） | `ApplicationArguments`（已解析好的对象） |
+> | **实际拿到什么** | `["--name=张三", "hello", "123"]` | 选项参数和非选项参数已分好 |
+> | **取 `--name` 的值** | 自己截字符串：`args[0].split("=")[1]` | 直接调：`args.getOptionValues("name")` → `["张三"]` |
+> | **取非 `--` 参数** | 自己判断哪些没 `--` 前缀 | 直接调：`args.getNonOptionArgs()` → `["hello", "123"]` |
+>
+> 简单说：`CommandLineRunner` 给你一坨原始字符串自己解析；`ApplicationRunner` 帮你把 `--key=value` 和普通参数分好了，拿来就能用。
+>
+> **怎么选：** 需要用命令行参数选 `ApplicationRunner`，不需要参数选 `CommandLineRunner`。
+>
+> ```java
+> // CommandLineRunner —— 不关心参数，启动后跑一段逻辑
+> @Component
+> public class CacheWarmRunner implements CommandLineRunner {
+>     @Override
+>     public void run(String... args) throws Exception {
+>         cacheManager.preload(); // 预热缓存
+>     }
+> }
+>
+> // ApplicationRunner —— 需要用命令行参数
+> @Component
+> public class StartupCheckRunner implements ApplicationRunner {
+>     @Override
+>     public void run(ApplicationArguments args) throws Exception {
+>         if (args.containsOption("env")) {
+>             String env = args.getOptionValues("env").get(0);
+>             if ("prod".equals(env)) healthChecker.checkAll();
+>         }
+>     }
+> }
+>
+> // 多个 Runner 用 @Order 控制顺序，数字越小越先执行
+> @Component @Order(1)
+> public class RunnerA implements CommandLineRunner { ... }
+>
+> @Component @Order(2)
+> public class RunnerB implements ApplicationRunner { ... }
+> ```
+
+### 7. Spring Boot 有几种注入 Bean 的方式？各有什么优缺点？
+
+> 三种方式：**构造器注入、Setter 注入、字段注入（`@Autowired` 打在字段上）**。
+>
+> ```java
+> // ① 构造器注入（推荐）——单构造器时 @Autowired 可省略
+> @Component
+> public class OrderService {
+>     private final UserService userService;
+>     private final PayService payService;
+>
+>     public OrderService(UserService userService, PayService payService) {
+>         this.userService = userService;
+>         this.payService = payService;
+>     }
+> }
+>
+> // ② Setter 注入
+> @Component
+> public class OrderService {
+>     private UserService userService;
+>
+>     @Autowired
+>     public void setUserService(UserService userService) {
+>         this.userService = userService;
+>     }
+> }
+>
+> // ③ 字段注入（不推荐）
+> @Component
+> public class OrderService {
+>     @Autowired
+>     private UserService userService;
+> }
+> ```
+>
+> | | 构造器注入 | Setter 注入 | 字段注入 |
+> |---|---|---|---|
+> | **能否 `final`** | ✅ 可以，保证不可变 | ❌ 不行 | ❌ 不行 |
+> | **空指针安全** | ✅ 创建完就有值 | ⚠️ 可能没调 setter | ⚠️ 可能没注入 |
+> | **循环依赖** | ❌ 直接报错（好事，早暴露问题） | ✅ 能解决 | ✅ 能解决 |
+> | **可测试性** | ✅ new 时直接传 mock | ✅ 调 setter 传 mock | ❌ 要用反射才能测 |
+> | **Spring 推荐** | ✅ 官方推荐 | 可选依赖时用 | 不推荐 |
+>
+> **结论：构造器注入是首选**——不可变（`final`）、不空、好单元测试、循环依赖早发现。字段注入最简单但问题最多：不能 `final`、不好测试、隐藏依赖关系。
+### 8. Spring Boot 中 `@ConfigurationProperties` 和 `@Value` 的区别是什么？什么时候用哪个？
+
+> ```java
+> // @Value —— 一个一个取
+> @Component
+> public class RedisConfig {
+>     @Value("${spring.redis.host}")
+>     private String host;
+>
+>     @Value("${spring.redis.port}")
+>     private int port;
+>
+>     @Value("${spring.redis.password:}")  // 默认空字符串
+>     private String password;
+> }
+>
+> // @ConfigurationProperties —— 按 prefix 批量绑定
+> @Component
+> @ConfigurationProperties(prefix = "spring.redis")
+> public class RedisProperties {
+>     private String host;      // 自动绑定 spring.redis.host
+>     private int port;         // 自动绑定 spring.redis.port
+>     private String password;  // 自动绑定 spring.redis.password
+>     // getter/setter
+> }
+> ```
+>
+> | | `@Value` | `@ConfigurationProperties` |
+> |---|---|---|
+> | **绑定方式** | 一个字段一个注解 | 按 prefix 批量绑定 |
+> | **松散绑定** | ❌ 必须精确匹配 key | ✅ `redis-host` 能绑定到 `redisHost` |
+> | **SpEL 表达式** | ✅ 支持 `#{@beanName.method()}` | ❌ 不支持 |
+> | **配置校验** | ❌ 不支持 | ✅ 配合 `@Validated` + JSR 303 校验 |
+> | **动态刷新** | ❌ 启动后改了不生效 | ✅ 配合 `@RefreshScope` 可动态刷新 |
+> | **复杂对象** | ❌ List、Map 写法很丑 | ✅ 直接绑定嵌套对象 |
+> | **适合场景** | 取 1-2 个零散值 | 一组相关配置统一管理 |
+>
+> **怎么选：零散取值用 `@Value`，批量绑定用 `@ConfigurationProperties`。** Spring Boot 官方 Starter 用的全是 `@ConfigurationProperties`（如 `RedisProperties`、`DataSourceProperties`），因为支持松散绑定和校验，更规范。
+### 9. Spring Boot 支持哪些配置文件格式？`.properties` 和 `.yml` 加载优先级是怎样的？
+
+> Spring Boot 支持 `.properties` 和 `.yml`（`.yaml` 和 `.yml` 等同）两种格式。
+>
+> **优先级：`.properties` > `.yml`。** 两个文件同时存在且 key 相同时，`.properties` 的值生效。
+>
+> | | `.properties` | `.yml` |
+> |---|---|---|
+> | **格式** | `key=value`，扁平 | 缩进层级，树状结构 |
+> | **可读性** | 配置多了很乱 | 层级清晰，适合复杂配置 |
+> | **优先级** | **高** | 低 |
+> | **支持 List/Map** | 要用下标 `list[0]=a` | 天然支持 |
+>
+> ```properties
+> # .properties 扁平写法
+> spring.profiles.active=dev
+> spring.datasource.url=jdbc:mysql://localhost:3306/db
+> spring.datasource.username=root
+> spring.datasource.password=123456
+> ```
+>
+> ```yaml
+> # .yml 层级写法，可读性更好
+> spring:
+>   profiles:
+>     active: dev
+>   datasource:
+>     url: jdbc:mysql://localhost:3306/db
+>     username: root
+>     password: 123456
+> ```
+>
+> **实际项目中基本全用 `.yml`**，可读性好。优先级这个知道就行，不要两个文件混用，选一个坚持用。
+### 10. Spring Boot 多环境配置怎么实现？你在项目中怎么切换 dev / test / prod 环境？
+
+> **传统方式（纯 Spring Boot）：** 用 `application-{profile}.yml` 按环境拆配置文件。
+>
+> ```
+> application.yml           ← 公共配置
+> application-dev.yml       ← 开发环境
+> application-test.yml      ← 测试环境
+> application-prod.yml      ← 生产环境
+> ```
+>
+> ```yaml
+> # application.yml 里指定激活哪个环境
+> spring:
+>   profiles:
+>     active: dev
+> ```
+>
+> 启动时也可以覆盖：`java -jar app.jar --spring.profiles.active=prod`
+>
+> ---
+>
+> **项目实际方式（Nacos）：** 配置放 Nacos 服务端，本地只配 Nacos 地址和 profile，不同环境用 namespace 隔离。
+>
+> ```yaml
+> # 本地 bootstrap.yml
+> spring:
+>   application:
+>     name: order-service
+>   profiles:
+>     active: dev   # 切环境改这一行
+>   cloud:
+>     nacos:
+>       server-addr: 192.168.1.100:8848
+>       config:
+>         namespace: dev
+>         file-extension: yml
+> ```
+>
+> | | 纯 Spring Boot | Nacos |
+> |---|---|---|
+> | **配置存放** | 打在 jar 包里 | Nacos 服务端，不进 jar |
+> | **改配置** | 改代码重新打包部署 | Nacos 控制台改，不用重启 |
+> | **切环境** | 改 `spring.profiles.active` | 改 namespace 或 profile |
+> | **动态刷新** | ❌ 不支持 | ✅ `@RefreshScope` 实时生效 |
+> | **配置回滚** | 靠 Git 历史版本 | Nacos 自带历史版本管理 |
+>
+> **面试答法：** 先说传统方式（`application-{profile}.yml` + `spring.profiles.active`），再说项目实际用的 Nacos 方案——配置放 Nacos，用 namespace 隔离环境，支持动态刷新不用重启。
+### 11. Spring Boot 2.x 和 3.x 有哪些重要变化？升级时需要注意什么？
+
+> **最低要求提升：**
+>
+> | | Spring Boot 2.x | Spring Boot 3.x |
+> |---|---|---|
+> | **JDK** | 8+ | **17+** |
+> | **Spring Framework** | 5.x | **6.x** |
+> | **Java EE 包名** | `javax.*` | **`jakarta.*`** |
+>
+> **① javax → jakarta（升级最痛的点）。** Java EE 捐给 Eclipse 基金会后改名为 Jakarta EE，包名跟着改。涉及 Servlet、Validation、JPA、Mail 等所有 Java EE 相关包。
+>
+> ```java
+> // 2.x
+> import javax.servlet.http.HttpServletRequest;
+> import javax.validation.Valid;
+>
+> // 3.x —— 全部改为 jakarta
+> import jakarta.servlet.http.HttpServletRequest;
+> import jakarta.validation.Valid;
+> ```
+>
+> **② 自动配置机制变了。**
+>
+> ```properties
+> # 2.x：META-INF/spring.factories（key-value 格式）
+> org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+>   com.example.MyAutoConfiguration
+>
+> # 3.x：META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
+> # 每行一个全类名，去掉了 key-value 格式
+> com.example.MyAutoConfiguration
+> ```
+>
+> **③ 其他重要变化：**
+>
+> | 变化点 | 2.x | 3.x |
+> |---|---|---|
+> | **GraalVM 原生镜像** | 不支持 | ✅ 官方支持，启动快 10 倍+ |
+> | **Observability** | Spring Cloud Sleuth + Zipkin | Micrometer + Tracing，统一指标和链路追踪 |
+> | **Spring Security** | `WebSecurityConfigurerAdapter` | 废弃，改用 `SecurityFilterChain` Bean |
+> | **路径匹配** | AntPathMatcher | 默认改用 **PathPatternParser**，性能更好 |
+> | **Redis 配置前缀** | `spring.redis.*` | 改为 `spring.data.redis.*` |
+>
+> **④ 升级注意事项：**
+> 1. **先升 JDK 17**——硬门槛
+> 2. **javax → jakarta 全局替换**——IDE 批量替换 `import javax.` → `import jakarta.`，逐个验证
+> 3. **依赖版本对齐**——第三方库必须用支持 Spring Boot 3 的版本（MyBatis-Plus、Druid、Nacos 等）
+> 4. **spring.factories 迁移**——自研 Starter 要改配置文件位置和格式
+> 5. **Spring Security 配置改写**——`WebSecurityConfigurerAdapter` 废弃了
 
 ## 二、自动配置与 Starter 机制（8 题）
 
-14. Spring Boot 的自动装配原理是什么？从 `@EnableAutoConfiguration` 到最终加载配置类的完整链路是怎样的？
-15. `spring.factories` 文件在 Spring Boot 2.x 和 3.x 中有什么变化？
-16. `@ConditionalOnClass`、`@ConditionalOnMissingBean`、`@ConditionalOnProperty` 这些条件注解在自动装配中怎么协作的？
-17. 如何排除某个不想用的自动配置？比如不想用默认的 DataSource？
-18. 如果你自己封装一个公司内部的 Starter，步骤是怎样的？需要注意什么？
-19. 自定义 Starter 时，`xxx-spring-boot-starter` 和 `xxx-spring-boot-autoconfigure` 两个模块分别放什么？
-20. Starter 中的自动配置类和用户自己定义的 Bean，谁的优先级更高？如果用户想覆盖 Starter 的默认 Bean 怎么做？
-21. 你在项目中实际封装过哪些 Starter？解决了什么问题？
+### 14. Spring Boot 的自动装配原理是什么？从 `@EnableAutoConfiguration` 到最终加载配置类的完整链路是怎样的？
+
+> 一句话：**注解触发 → 读配置文件 → 加载候选类 → 条件过滤 → 注册 Bean。**
+>
+> **① 入口：`@EnableAutoConfiguration`**
+>
+> ```java
+> @SpringBootApplication
+>     ├── @SpringBootConfiguration
+>     ├── @EnableAutoConfiguration    // ← 自动装配入口
+>     └── @ComponentScan
+>
+> // @EnableAutoConfiguration 内部
+> @AutoConfigurationPackage
+> @Import(AutoConfigurationImportSelector.class)  // ← 关键
+> public @interface EnableAutoConfiguration { }
+> ```
+>
+> **② 读配置文件：`AutoConfigurationImportSelector`**
+>
+> 从所有 jar 包中读取候选自动配置类（可能有 100+ 个）：
+>
+> ```properties
+> # Spring Boot 2.x：META-INF/spring.factories（key-value 格式）
+> org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+>   org.springframework.boot.autoconfigure.web.servlet.WebMvcAutoConfiguration,\
+>   org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration,\
+>   ...
+>
+> # Spring Boot 3.x：META-INF/spring/...AutoConfiguration.imports（每行一个类名）
+> org.springframework.boot.autoconfigure.web.servlet.WebMvcAutoConfiguration
+> org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+> ```
+>
+> **③ 条件过滤（核心）：** 不是读出来就全部加载，要过三层过滤：
+>
+> ```java
+> // 过滤一：@ConditionalOnClass —— classpath 里有没有这个类
+> @ConditionalOnClass(DataSource.class)   // 没引入数据库依赖 → 不加载
+> public class DataSourceAutoConfiguration { }
+>
+> // 过滤二：@ConditionalOnMissingBean —— 容器里有没有这个 Bean
+> @ConditionalOnMissingBean
+> @Bean
+> public DataSource dataSource() { }      // 用户自己定义了 → 不加载
+>
+> // 过滤三：@ConditionalOnProperty —— 配置开关
+> @ConditionalOnProperty(prefix = "spring.redis", name = "enabled", havingValue = "true")
+> public class RedisAutoConfiguration { }  // 没配或配了 false → 不加载
+> ```
+>
+> **④ 注册 BeanDefinition：** 过滤后剩下的配置类注册到容器，在 `refresh()` 时实例化。
+>
+> **完整链路：**
+>
+> ```
+> @SpringBootApplication
+>   └→ @EnableAutoConfiguration
+>        └→ @Import(AutoConfigurationImportSelector)
+>             └→ selectImports()
+>                  └→ 读 spring.factories / AutoConfiguration.imports（100+ 个候选类）
+>                       └→ @ConditionalOnClass 过滤（classpath 有没有）
+>                       └→ @ConditionalOnMissingBean 过滤（用户有没有自定义）
+>                       └→ @ConditionalOnProperty 过滤（配置开关）
+>                            └→ 剩下的注册为 BeanDefinition → refresh() 时实例化
+> ```
+>
+> **面试答法（四步说清楚）：** `@EnableAutoConfiguration` 触发 → `AutoConfigurationImportSelector` 读配置文件拿到候选类 → 条件注解过滤 → 剩下的注册为 Bean。
+### 15. `spring.factories` 文件在 Spring Boot 2.x 和 3.x 中有什么变化？
+
+> | | 2.x | 3.x |
+> |---|---|---|
+> | **文件路径** | `META-INF/spring.factories` | `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` |
+> | **格式** | key-value（`EnableAutoConfiguration=类1,类2`） | 每行一个全类名 |
+> | **一个文件管所有** | ✅ 同一个文件存多种扩展点 | ❌ 每种扩展点独立文件 |
+>
+> 变化的原因：`spring.factories` 一个文件塞了太多东西（自动配置、Initializer、Listener 全混在一起），3.x 拆开更清晰，加载也更快。如果自研了 Starter，升级 3.x 时要迁移这个文件。
+### 16. `@ConditionalOnClass`、`@ConditionalOnMissingBean`、`@ConditionalOnProperty` 这些条件注解在自动装配中怎么协作的？
+### 17. 如何排除某个不想用的自动配置？比如不想用默认的 DataSource？
+### 18. 如果你自己封装一个公司内部的 Starter，步骤是怎样的？需要注意什么？
+### 19. 自定义 Starter 时，`xxx-spring-boot-starter` 和 `xxx-spring-boot-autoconfigure` 两个模块分别放什么？
+### 20. Starter 中的自动配置类和用户自己定义的 Bean，谁的优先级更高？如果用户想覆盖 Starter 的默认 Bean 怎么做？
+### 21. 你在项目中实际封装过哪些 Starter？解决了什么问题？
 
 ## 三、IoC 容器与 Bean 生命周期（8 题）
 
-22. IoC（控制反转）你是怎么理解的？它解决了什么问题？
-23. Spring 容器启动时，Bean 的完整生命周期是怎样的？每一步都在做什么？
-24. `BeanFactory` 和 `ApplicationContext` 的区别是什么？你平时用的是哪个？
-25. `@Component` 和 `@Bean` 的区别是什么？什么场景用 `@Bean`？
-26. Bean 的作用域有哪些？`singleton`、`prototype`、`request`、`session` 分别在什么场景使用？
-27. 如果一个 `prototype` 作用域的 Bean 被注入到 `singleton` 的 Bean 中，会发生什么？怎么解决？
-28. Spring 怎么解决循环依赖的？三级缓存各自存的是什么？为什么必须是三级，两级行不行？
-29. 构造器注入的循环依赖能解决吗？为什么？
+### 22. IoC（控制反转）你是怎么理解的？它解决了什么问题？
+### 23. Spring 容器启动时，Bean 的完整生命周期是怎样的？每一步都在做什么？
+### 24. `BeanFactory` 和 `ApplicationContext` 的区别是什么？你平时用的是哪个？
+### 25. `@Component` 和 `@Bean` 的区别是什么？什么场景用 `@Bean`？
+### 26. Bean 的作用域有哪些？`singleton`、`prototype`、`request`、`session` 分别在什么场景使用？
+### 27. 如果一个 `prototype` 作用域的 Bean 被注入到 `singleton` 的 Bean 中，会发生什么？怎么解决？
+### 28. Spring 怎么解决循环依赖的？三级缓存各自存的是什么？为什么必须是三级，两级行不行？
+### 29. 构造器注入的循环依赖能解决吗？为什么？
 
 ## 四、AOP 面向切面编程（5 题）
 
-30. AOP 的实现原理是什么？JDK 动态代理和 CGLIB 代理有什么区别？Spring Boot 默认用哪个？
-31. `@Before`、`@After`、`@AfterReturning`、`@AfterThrowing`、`@Around` 的执行顺序是怎样的？
-32. 你在项目中用 AOP 做过哪些事？具体怎么实现的？
-33. AOP 的自调用问题是什么？为什么同一个类里调用 `@Transactional` 方法不走代理？怎么解决？
-34. Spring AOP 和 AspectJ 有什么区别？各自适用什么场景？
+### 30. AOP 的实现原理是什么？JDK 动态代理和 CGLIB 代理有什么区别？Spring Boot 默认用哪个？
+### 31. `@Before`、`@After`、`@AfterReturning`、`@AfterThrowing`、`@Around` 的执行顺序是怎样的？
+### 32. 你在项目中用 AOP 做过哪些事？具体怎么实现的？
+### 33. AOP 的自调用问题是什么？为什么同一个类里调用 `@Transactional` 方法不走代理？怎么解决？
+### 34. Spring AOP 和 AspectJ 有什么区别？各自适用什么场景？
 
 ## 五、事务管理（7 题）
 
-35. Spring 的事务传播机制有哪几种？`REQUIRED`、`REQUIRES_NEW`、`NESTED` 有什么区别？你在项目中怎么选的？
-36. `@Transactional` 注解在什么情况下会失效？列举至少 5 种场景。
-37. 自调用导致事务失效怎么解决？除了把方法拆到另一个类还有别的办法吗？
-38. 事务的隔离级别有哪些？分别能解决什么并发读问题？
-39. 分布式事务你是怎么处理的？Seata 的 AT 模式和 TCC 模式有什么区别？
-40. 为什么说"不要在事务里做 RPC 调用和 IO 操作"？你遇到过这个问题吗？
-41. 声明式事务和编程式事务各有什么优缺点？你一般在什么场景用编程式事务？
+### 35. Spring 的事务传播机制有哪几种？`REQUIRED`、`REQUIRES_NEW`、`NESTED` 有什么区别？你在项目中怎么选的？
+### 36. `@Transactional` 注解在什么情况下会失效？列举至少 5 种场景。
+### 37. 自调用导致事务失效怎么解决？除了把方法拆到另一个类还有别的办法吗？
+### 38. 事务的隔离级别有哪些？分别能解决什么并发读问题？
+### 39. 分布式事务你是怎么处理的？Seata 的 AT 模式和 TCC 模式有什么区别？
+### 40. 为什么说"不要在事务里做 RPC 调用和 IO 操作"？你遇到过这个问题吗？
+### 41. 声明式事务和编程式事务各有什么优缺点？你一般在什么场景用编程式事务？
 
 ## 六、Spring MVC 核心技术（6 题）
 
-42. Spring MVC 一次请求的完整处理流程是怎样的？从 DispatcherServlet 开始一步步说清楚。
-43. 拦截器（Interceptor）和过滤器（Filter）的区别是什么？执行顺序是怎样的？
-44. 如何在 Spring Boot 中做统一的参数校验？`@Valid`、`@Validated`、自定义校验注解怎么用？
-45. 全局异常处理怎么实现？`@ControllerAdvice` + `@ExceptionHandler` 的原理是什么？
-46. 统一返回格式怎么封装？你在项目中是怎么做的？
-47. 如何在 Spring Boot 中做接口的幂等性校验？有几种方案？
+### 42. Spring MVC 一次请求的完整处理流程是怎样的？从 DispatcherServlet 开始一步步说清楚。
+### 43. 拦截器（Interceptor）和过滤器（Filter）的区别是什么？执行顺序是怎样的？
+### 44. 如何在 Spring Boot 中做统一的参数校验？`@Valid`、`@Validated`、自定义校验注解怎么用？
+### 45. 全局异常处理怎么实现？`@ControllerAdvice` + `@ExceptionHandler` 的原理是什么？
+### 46. 统一返回格式怎么封装？你在项目中是怎么做的？
+### 47. 如何在 Spring Boot 中做接口的幂等性校验？有几种方案？
 
 ## 七、数据库与持久层（7 题）
 
-48. Spring Boot 怎么整合 MyBatis / MyBatis-Plus？你做过哪些配置？
-49. MyBatis-Plus 的分页插件原理是什么？你在项目中怎么用的？
-50. MyBatis 的 `#{}` 和 `${}` 有什么区别？为什么要尽量用 `#{}`？
-51. SQL 执行慢你怎么排查和优化？说说你的思路和工具。
-52. 什么时候该建索引？联合索引的"最左前缀"原则是什么？你在项目中有没有因为索引使用不对导致过慢查询？
-53. 分库分表后，怎么处理跨库的分页、排序、聚合查询？ShardingSphere 是怎么解决这些问题的？
-54. 读写分离你是怎么做的？主从延迟导致读到旧数据怎么处理？
+### 48. Spring Boot 怎么整合 MyBatis / MyBatis-Plus？你做过哪些配置？
+### 49. MyBatis-Plus 的分页插件原理是什么？你在项目中怎么用的？
+### 50. MyBatis 的 `#{}` 和 `${}` 有什么区别？为什么要尽量用 `#{}`？
+### 51. SQL 执行慢你怎么排查和优化？说说你的思路和工具。
+### 52. 什么时候该建索引？联合索引的"最左前缀"原则是什么？你在项目中有没有因为索引使用不对导致过慢查询？
+### 53. 分库分表后，怎么处理跨库的分页、排序、聚合查询？ShardingSphere 是怎么解决这些问题的？
+### 54. 读写分离你是怎么做的？主从延迟导致读到旧数据怎么处理？
 
 ## 八、缓存实战（9 题）
 
-55. 缓存穿透、缓存击穿、缓存雪崩分别是什么意思？你在项目中怎么解决的？
-56. 如何保证数据库和缓存的双写一致性？Cache-Aside 模式的具体步骤是什么？延迟双删怎么做？
-57. Redis 在你的项目中具体用了哪些场景？每个场景用的什么数据结构？为什么选这个结构？
-58. 热点 Key 突然过期导致大量请求打到数据库，怎么处理？
-59. 大 Key（Big Key）有什么危害？怎么发现和拆解？
-60. Redis 分布式锁是怎么实现的？`SETNX` + Lua 脚本和 Redisson 的 RedLock 有什么区别？
-61. 用 Redis 实现一个延时队列怎么做？有哪些方案？
-62. 本地缓存（Caffeine）和分布式缓存（Redis）怎么搭配使用？多级缓存的更新策略是什么？
-63. Redis 的内存淘汰策略有哪些？你在项目中用的是哪个？为什么？
+### 55. 缓存穿透、缓存击穿、缓存雪崩分别是什么意思？你在项目中怎么解决的？
+### 56. 如何保证数据库和缓存的双写一致性？Cache-Aside 模式的具体步骤是什么？延迟双删怎么做？
+### 57. Redis 在你的项目中具体用了哪些场景？每个场景用的什么数据结构？为什么选这个结构？
+### 58. 热点 Key 突然过期导致大量请求打到数据库，怎么处理？
+### 59. 大 Key（Big Key）有什么危害？怎么发现和拆解？
+### 60. Redis 分布式锁是怎么实现的？`SETNX` + Lua 脚本和 Redisson 的 RedLock 有什么区别？
+### 61. 用 Redis 实现一个延时队列怎么做？有哪些方案？
+### 62. 本地缓存（Caffeine）和分布式缓存（Redis）怎么搭配使用？多级缓存的更新策略是什么？
+### 63. Redis 的内存淘汰策略有哪些？你在项目中用的是哪个？为什么？
 
 ## 九、消息队列实战（7 题）
 
-64. 消息队列在你的项目中解决了什么问题？为什么不用同步调用而要用 MQ？
-65. 如何保证消息不丢失？从生产者、Broker、消费者三端分别说说。
-66. 消息重复消费怎么处理？你的系统是怎么做幂等的？
-67. 消息堆积了怎么办？积压几百万条消息你怎么快速处理？
-68. 顺序消息怎么保证？什么场景需要顺序消息？
-69. Kafka 的消费者组（Consumer Group）和分区（Partition）之间是什么关系？
-70. Kafka 的 ISR 机制是什么？`acks=all` 和 `min.insync.replicas` 怎么配合保证可靠性？
+### 64. 消息队列在你的项目中解决了什么问题？为什么不用同步调用而要用 MQ？
+### 65. 如何保证消息不丢失？从生产者、Broker、消费者三端分别说说。
+### 66. 消息重复消费怎么处理？你的系统是怎么做幂等的？
+### 67. 消息堆积了怎么办？积压几百万条消息你怎么快速处理？
+### 68. 顺序消息怎么保证？什么场景需要顺序消息？
+### 69. Kafka 的消费者组（Consumer Group）和分区（Partition）之间是什么关系？
+### 70. Kafka 的 ISR 机制是什么？`acks=all` 和 `min.insync.replicas` 怎么配合保证可靠性？
 
 ## 十、分布式与微服务（10 题）
 
-71. 你把单体项目拆成微服务的依据是什么？你是怎么划分服务边界的？
-72. 服务注册与发现是怎么工作的？Nacos 和 Eureka 有什么核心区别？
-73. 负载均衡策略有哪些？Ribbon 的轮询、随机、加权轮询分别怎么用？
-74. 服务间调用（OpenFeign / Dubbo）你怎么选的？底层原理是什么？
-75. 微服务网关（Gateway / Zuul）的作用是什么？你在网关层做了哪些事（鉴权、限流、日志、路由）？
-76. 如何实现一个分布式 ID 生成器？雪花算法有什么优缺点？时钟回拨怎么处理？
-77. 分布式 Session 怎么解决？Spring Session + Redis 的原理是什么？
-78. 分布式锁除了 Redis 实现还有哪些方案？ZooKeeper 实现和 Redis 实现各有什么优缺点？
-79. CAP 定理和 BASE 理论怎么理解？在你的项目里是怎么权衡的？
-80. 微服务链路追踪怎么实现？TraceID 如何在服务间传递？
+### 71. 你把单体项目拆成微服务的依据是什么？你是怎么划分服务边界的？
+### 72. 服务注册与发现是怎么工作的？Nacos 和 Eureka 有什么核心区别？
+### 73. 负载均衡策略有哪些？Ribbon 的轮询、随机、加权轮询分别怎么用？
+### 74. 服务间调用（OpenFeign / Dubbo）你怎么选的？底层原理是什么？
+### 75. 微服务网关（Gateway / Zuul）的作用是什么？你在网关层做了哪些事（鉴权、限流、日志、路由）？
+### 76. 如何实现一个分布式 ID 生成器？雪花算法有什么优缺点？时钟回拨怎么处理？
+### 77. 分布式 Session 怎么解决？Spring Session + Redis 的原理是什么？
+### 78. 分布式锁除了 Redis 实现还有哪些方案？ZooKeeper 实现和 Redis 实现各有什么优缺点？
+### 79. CAP 定理和 BASE 理论怎么理解？在你的项目里是怎么权衡的？
+### 80. 微服务链路追踪怎么实现？TraceID 如何在服务间传递？
 
 ## 十一、安全与鉴权（4 题）
 
-81. Spring Security 的认证和授权流程是怎样的？过滤器链里有哪几个关键的 Filter？
-82. 无状态登录（JWT Token）怎么实现？Token 过期刷新机制你怎么设计的？
-83. 如何防止 CSRF 和 XSS 攻击？Spring Security 默认做了什么？你还做了哪些额外防护？
-84. OAuth2.0 的授权码模式和密码模式有什么区别？你在项目中用的是哪种？
+### 81. Spring Security 的认证和授权流程是怎样的？过滤器链里有哪几个关键的 Filter？
+### 82. 无状态登录（JWT Token）怎么实现？Token 过期刷新机制你怎么设计的？
+### 83. 如何防止 CSRF 和 XSS 攻击？Spring Security 默认做了什么？你还做了哪些额外防护？
+### 84. OAuth2.0 的授权码模式和密码模式有什么区别？你在项目中用的是哪种？
 
 ## 十二、性能优化与监控（6 题）
 
-85. Spring Boot 应用启动慢怎么排查和优化？
-86. 线上接口响应突然变慢，你的排查思路是什么？
-87. 怎么定位 JVM 的 CPU 飙高和内存泄漏问题？用什么工具？
-88. Spring Boot Actuator 你用了哪些端点？如何自定义健康检查？
-89. 如何建设一个统一的日志收集和告警体系？你的项目里是怎么做的？
-90. 线上出了问题你怎么快速回滚和止损？有什么预案？
+### 85. Spring Boot 应用启动慢怎么排查和优化？
+### 86. 线上接口响应突然变慢，你的排查思路是什么？
+### 87. 怎么定位 JVM 的 CPU 飙高和内存泄漏问题？用什么工具？
+### 88. Spring Boot Actuator 你用了哪些端点？如何自定义健康检查？
+### 89. 如何建设一个统一的日志收集和告警体系？你的项目里是怎么做的？
+### 90. 线上出了问题你怎么快速回滚和止损？有什么预案？
 
 ## 十三、场景设计题（7 题）
 
-91. 如何设计一个秒杀系统？从限流、库存扣减、下单、支付整个链路说说你的方案。
-92. 接口的 QPS 从 1000 突然涨到 10000，你有哪些手段保证系统不崩？
-93. 如何设计一个短链接生成系统？
-94. 如何设计一个分布式定时任务调度系统？
-95. 一个接口依赖多个上游服务，怎么设计才能保证高可用（兜底、降级、熔断）？
-96. 如何设计一个支持千万级 DAU 的网站 UV 统计功能？
-97. 定时任务扫表处理过期订单，数据量太大扫不过来怎么办？
+### 91. 如何设计一个秒杀系统？从限流、库存扣减、下单、支付整个链路说说你的方案。
+### 92. 接口的 QPS 从 1000 突然涨到 10000，你有哪些手段保证系统不崩？
+### 93. 如何设计一个短链接生成系统？
+### 94. 如何设计一个分布式定时任务调度系统？
+### 95. 一个接口依赖多个上游服务，怎么设计才能保证高可用（兜底、降级、熔断）？
+### 96. 如何设计一个支持千万级 DAU 的网站 UV 统计功能？
+### 97. 定时任务扫表处理过期订单，数据量太大扫不过来怎么办？
 
 ## 十四、项目实战深挖（3 题）
 
-98. 介绍一个你觉得最有挑战的项目。中间遇到了什么问题？怎么解决的？用到了哪些 Spring Boot 技术？
-99. 你的项目中如果突然流量翻了 10 倍，哪些地方会最先出问题？你会怎么改造？
-100. 你平时怎么学习 Spring Boot 的？看过哪些源码？有什么学习习惯？
+### 98. 介绍一个你觉得最有挑战的项目。中间遇到了什么问题？怎么解决的？用到了哪些 Spring Boot 技术？
+### 99. 你的项目中如果突然流量翻了 10 倍，哪些地方会最先出问题？你会怎么改造？
+### 100. 你平时怎么学习 Spring Boot 的？看过哪些源码？有什么学习习惯？
 
 ---
 
