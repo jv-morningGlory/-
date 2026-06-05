@@ -844,14 +844,182 @@
 >
 > **面试答法：** `ApplicationContext` 是 `BeanFactory` 的子接口，加了事件发布、AOP、国际化、自动配置等功能。`BeanFactory` 懒加载，`ApplicationContext` 预加载。平时用的全是 `ApplicationContext`，Spring Boot 启动创建的就是它。
 ### 25. `@Component` 和 `@Bean` 的区别是什么？什么场景用 `@Bean`？
+
+| 维度 | `@Component` | `@Bean` |
+|------|-------------|---------|
+| **作用位置** | 类上 | 方法上（必须在 `@Configuration` 类内） |
+| **注册方式** | 类路径扫描（Spring 自动发现） | 手动声明，显式调用工厂方法 |
+| **归属权** | 标注的类必须**你自己能改源码** | 适用于**第三方类**（改不了源码） |
+| **灵活性** | 单一用途，全量扫描注册 | 可加条件判断、循环创建多个实例 |
+
+> 一句话：**能改源码用 `@Component`，改不了或需要灵活控制用 `@Bean`**。
+
 ### 26. Bean 的作用域有哪些？`singleton`、`prototype`、`request`、`session` 分别在什么场景使用？
+
+| 作用域 | 生命周期 | 典型场景 |
+|--------|---------|---------|
+| **singleton** | 容器生命周期内只有一个实例（默认） | 无状态服务、工具类、配置类 |
+| **prototype** | 每次 `getBean()` 都创建新实例 | 有状态对象、每次请求需要独立实例 |
+| **request** | 每次 HTTP 请求创建一个新实例（仅 Web 环境） | 请求级别的数据封装（如 `RequestContext`） |
+| **session** | 每个 HTTP Session 创建一个新实例（仅 Web 环境） | 用户会话级别的数据（如购物车） |
+| **application** | 整个 ServletContext 生命周期一个实例 | 应用级别的全局配置 |
+| **websocket** | 每个 WebSocket 会话一个实例 | WebSocket 通信上下文 |
+
+**判断标准**：这个对象有没有**可变状态**。
+
+- **无状态** → `singleton`：`Service`、`Dao`、工具类，线程安全，复用实例
+- **有状态** → `prototype`：每次请求需要独立数据，用完即弃
+
+### 各作用域实战示例
+
+```java
+// ==================== singleton（默认） ====================
+@Service
+public class UserService {
+    // 无状态，线程安全，整个应用共享一个实例
+    public User getUser(Long id) { ... }
+}
+
+// ==================== prototype ====================
+@Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
+@Component
+public class ExcelExportTask {
+    // 每次导出都是一个新任务对象，各自持有独立的文件路径和进度
+    private String filePath;
+    private int progress;
+
+    public void export() { ... }
+}
+
+// ==================== request ====================
+@Component
+@Scope(value = WebApplicationContext.SCOPE_REQUEST, proxyMode = ScopedProxyMode.TARGET_CLASS)
+public class RequestContextHolder {
+    // 每个 HTTP 请求一个实例，存当前请求的 traceId、用户信息等
+    private String traceId;
+    private Long userId;
+
+    // 注意：需配合代理模式，否则 singleton 注入时会报错
+}
+
+// ==================== session ====================
+@Component
+@Scope(value = WebApplicationContext.SCOPE_SESSION, proxyMode = ScopedProxyMode.TARGET_CLASS)
+public class UserShoppingCart {
+    // 每个用户 Session 一个购物车，登录期间跨请求共享
+    private final List<CartItem> items = new ArrayList<>();
+
+    public void addItem(CartItem item) { items.add(item); }
+    public List<CartItem> getItems() { return items; }
+}
+
+// ==================== application ====================
+@Component
+@Scope(WebApplicationContext.SCOPE_APPLICATION, proxyMode = ScopedProxyMode.TARGET_CLASS)
+public class AppConfigHolder {
+    // 整个应用生命周期只有一个实例，类似 ServletContext 属性
+    private Map<String, String> configMap;
+}
+
+// ==================== websocket ====================
+@Component
+@Scope(WebApplicationContext.SCOPE_WEBSOCKET, proxyMode = ScopedProxyMode.TARGET_CLASS)
+public class WebSocketSessionContext {
+    // 每个 WebSocket 连接一个实例，存储该连接的会话信息
+    private String sessionId;
+    private String userName;
+}
+```
+
+> **注意**：`request`、`session`、`application`、`websocket` 均需在 Web 环境下使用，且需要设置 `proxyMode = TARGET_CLASS`（或 `INTERFACES`）做**作用域代理**，否则注入到 `singleton` 时会因为生命周期不匹配报错。
+
+### 面试加分点：prototype 注入到 singleton 的问题
+
+`prototype` Bean 被注入到 `singleton` 时，**Spring 只创建一次 prototype 实例**（注入时创建），之后 singleton 永远用的是同一个 prototype 实例。原因：singleton 创建时依赖注入只发生一次。
+
+**解决方案**：
+1. 改用 `ObjectProvider<Bean>`（推荐），每次调用 `getObject()` 获取新实例
+2. 不用注入，通过 `ApplicationContext.getBean()` 手动获取
+
+```java
+// 方案一：ObjectProvider（推荐）
+@Service
+public class OrderService {
+    @Autowired
+    private ObjectProvider<OrderContext> orderContextProvider;
+
+    public void handle() {
+        OrderContext ctx = orderContextProvider.getObject();  // 每次都是新的
+    }
+}
+
+// 方案二：手动获取
+@Service
+public class OrderService {
+    @Autowired
+    private ApplicationContext ctx;
+
+    public void handle() {
+        OrderContext ctx2 = ctx.getBean(OrderContext.class);  // 每次都是新的
+    }
+}
+```
+
 ### 27. 如果一个 `prototype` 作用域的 Bean 被注入到 `singleton` 的 Bean 中，会发生什么？怎么解决？
+
 ### 28. Spring 怎么解决循环依赖的？三级缓存各自存的是什么？为什么必须是三级，两级行不行？
+
+参看  Spring核心知识.md
+
+---
+
 ### 29. 构造器注入的循环依赖能解决吗？为什么？
+
+**不能解决，直接抛异常。**
+
+---
+
 
 ## 四、AOP 面向切面编程（5 题）
 
 ### 30. AOP 的实现原理是什么？JDK 动态代理和 CGLIB 代理有什么区别？Spring Boot 默认用哪个？
+
+**实现原理：**
+
+Spring AOP 基于**动态代理**。容器启动时，通过 `BeanPostProcessor`（`AbstractAutoProxyCreator`）对目标 Bean 创建代理对象。调用时先走代理的拦截逻辑（advice），再调用目标方法，实现横切逻辑（日志、事务、缓存等）与业务代码解耦。
+
+> **核心流程：** 目标 Bean 初始化后 → `postProcessAfterInitialization()` → 判断是否有切面匹配 → 创建代理对象替换原 Bean 放入容器。
+
+---
+
+**JDK 动态代理 vs CGLIB 代理**
+
+| 维度 | JDK 动态代理 | CGLIB 代理 |
+|------|------------|-----------|
+| 实现方式 | `java.lang.reflect.Proxy` 生成接口实现类 | 字节码生成（ASM），子类化目标类 |
+| 目标要求 | 目标类必须有**接口** | 目标类无需接口（但必须是非 `final` 类） |
+| 性能 | 创建慢、调用快（JDK 1.8+ 已优化） | 创建快（有缓存）、调用略慢 |
+| 方法拦截 | 只能拦截**接口方法** | 可拦截类及父类的 public 方法 |
+
+> **关键限制：** 目标类为 `final` 或方法为 `final` 时，CGLIB 无法代理。
+
+**Spring Boot 默认用哪个？**
+
+- Spring Boot（Spring 5+）**默认使用 CGLIB**（`spring.aop.proxy-target-class=true`）。
+- 只有当显式设置 `proxy-target-class=false` 且目标类实现了接口时，才回退到 JDK 动态代理。
+- 即：**不设参数 → 一律 CGLIB**。
+
+```java
+// Spring Boot 默认配置（application.properties 无需额外设置）
+spring.aop.proxy-target-class=true
+spring.aop.auto=true
+```
+
+```java
+// 强制使用 JDK 动态代理
+spring.aop.proxy-target-class=false
+```
+
 ### 31. `@Before`、`@After`、`@AfterReturning`、`@AfterThrowing`、`@Around` 的执行顺序是怎样的？
 ### 32. 你在项目中用 AOP 做过哪些事？具体怎么实现的？
 ### 33. AOP 的自调用问题是什么？为什么同一个类里调用 `@Transactional` 方法不走代理？怎么解决？

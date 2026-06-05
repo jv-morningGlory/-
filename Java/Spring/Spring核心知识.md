@@ -720,7 +720,6 @@ public class AService {
 | **生命周期** | `@PostConstruct` | 初始化回调 |
 | | `@PreDestroy` | 销毁回调 |
 
----
 
 ## 十二、面试：常用注解怎么答
 
