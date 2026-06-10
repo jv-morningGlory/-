@@ -10,26 +10,27 @@
 | 子步骤 | 一句话说明 | 工厂比喻 | 产出文件 |
 |--------|-----------|---------|---------|
 | **4a** 拆任务 | 把大需求拆成小任务卡片 | 项目经理排甘特图 | `tasks/TASKS.md` |
-| **4b** 写实现规格 | 每个任务写清楚"要写哪些文件、什么方法签名" | 给工人的零件清单 | `specs/impl-t{xx}.md`（8份） |
-| **4c** 写 API + DB 契约 | 所有接口和表结构的"宪法" | 建筑蓝图，所有人必须照着来 | `specs/api-spec.md` + `specs/db-schema.md` |
+| **4b** 写 API + DB 契约 | 所有接口和表结构的"宪法" | 建筑蓝图，所有人必须照着来 | `specs/api-spec.md` + `specs/db-schema.md` |
+| **4c** 写实现规格 | 每个任务写清楚"要写哪些文件、什么方法签名" | 给工人的零件清单 | `specs/impl-t{xx}.md`（8份） |
 | **4d** 写提示词 | 给 Agent 的角色、规范、执行指令 | 员工手册 + SOP | `prompts/` 目录下三类文件 |
 | **4e** 配 Hooks | Agent 每次保存文件自动触发检查 | 流水线上的自动质检机 | `.claude/settings.json` + `.claude/hooks/*.sh` |
-| **4f** 写 Skills | 封装常用操作为可复用命令 | 工具箱里的专用工具 | `.claude/skills/*.md` |
+| **4f** 写 Skills | 封装常用操作为可复用命令 | 工具箱里的专用工具 | `.claude/skills/*/SKILL.md` |
 
 ---
 
-## 6.1 4a. 用 split-task Skill 拆解任务 → Architecture Feedforward
+## 6.1 4a. 自定义 split-task Skill 拆解任务 → Architecture Feedforward
 
-> **做什么？** 把 PRD（产品需求文档）拆成一张**任务看板**。
+> **做什么？** 自定义一个 `split-task` Skill，把 PRD（产品需求文档）拆成一张**任务看板**。
 >
 > **为什么需要？** 一个"博客系统"太大了，AI 一次做不完。必须拆成小任务，标注谁做、先后顺序、哪些可以同时做。
 
-**`.claude/skills/split-task.md` 的内容：**
+**Step 1：创建 Skill 文件 `.claude/skills/split-task/SKILL.md`**
 
-```markdown
+```yaml
 ---
 name: split-task
 description: 将 PRD 拆解成可并行的子任务
+user-invocable: true
 ---
 读取 specs/PRD.md。按模块依赖关系拆分任务到 tasks/TASKS.md。
 规则：
@@ -48,10 +49,10 @@ claude "/split-task"
 
 **生成结果 `tasks/TASKS.md`：**
 
+> 自动生成于 S4，每次 Agent 完成任务后更新勾选状态
+
 ```markdown
 # 任务看板
-
-> 自动生成于 S4，每次 Agent 完成任务后更新勾选状态
 
 ## Phase 1：基础设施（串行，约 0.5h）
 - [ ] T01: Maven 多模块初始化（父 POM + blog-common）
@@ -86,26 +87,41 @@ claude "/split-task"
 - [ ] T12: 全局规范检查
 - [ ] T13: 集成测试（全链路）
 - [ ] T14: API 全链路验证
+```
 
-## 依赖关系图
+**依赖关系图：**
+
+```mermaid
+graph TD
+    subgraph Phase1["Phase 1：基础设施"]
+        T01["T01 Maven 初始化"] --> T02["T02 DDL + 初始数据"] --> T03["T03 通用框架"]
+    end
+
+    subgraph Phase2["Phase 2：核心功能"]
+        T03 --> T04["T04 用户认证<br/>Agent-A"]
+        T03 --> T05["T05 分类管理<br/>Agent-A"]
+        T03 --> T06["T06 标签管理<br/>Agent-B"]
+        T04 --> T07["T07 文章管理<br/>Agent-B"]
+        T05 --> T07
+        T06 --> T07
+        T07 --> T08["T08 评论<br/>Agent-C"]
+        T04 --> T08
+    end
+
+    subgraph Phase3["Phase 3：增强功能"]
+        T07 --> T09["T09 全文搜索<br/>Agent-D"]
+        T07 --> T10["T10 浏览量统计<br/>Agent-E"]
+        T10 --> T11["T11 热门排行<br/>Agent-E"]
+    end
+
+    subgraph Phase4["Phase 4：测试集成"]
+        T11 --> T12["T12 规范检查"]
+        T12 --> T13["T13 集成测试"]
+        T13 --> T14["T14 全链路验证"]
+    end
 ```
-T01 → T02 → T03
-              ↓
-     ┌────────┼──────────┐
-     ↓        ↓          ↓
-    T04     T05/T06     (认证/分类/标签分别独立)
-     └────────┼──────────┘
-              ↓
-          T07 (文章)
-              ↓
-     ┌────────┼──────────┐
-     ↓        ↓          ↓
-    T08      T09        T10
-   (评论)   (搜索)     (统计)     ← 三个可并行
-                        ↓
-                    T11 (排行)
-```
-```
+
+> **关键依赖链：** T04（认证）是全局基础 — T07（文章）和 T08（评论）都依赖它，必须尽早完成
 
 **拆解的关键决策（人类要做）：**
 
@@ -122,156 +138,15 @@ T01 → T02 → T03
 
 ---
 
-## 6.2 4b. 用 create-spec Skill 生成详细实现规格 → Behaviour Feedforward
-
-> **做什么？** 对每个任务，生成一份详细规格文件，把文件清单、方法签名、业务逻辑全部定死。
->
-> **怎么理解？** 就像盖楼——任务名是"盖卫生间"，规格文件是"卫生间有几个水管、电线走哪里、瓷砖贴什么颜色"的详细图纸。
-
-**`.claude/skills/create-spec.md` 的内容：**
-
-```markdown
----
-name: create-spec
-description: 根据 PRD 生成指定模块的详细实现规格
----
-读取：
-- specs/PRD.md（需求来源）
-- specs/api-spec.md（接口契约）—— 如果已存在
-- specs/db-schema.md（数据库契约）—— 如果已存在
-- CLAUDE.md（命名和编码规范）
-
-为指定任务（如 T04）生成 specs/impl-t{xx}.md，包含：
-1. 涉及文件清单（每个 Java 类的完整路径）
-2. 核心方法签名（Service 接口和 Controller 端点）
-3. 业务逻辑要点（校验规则、边界条件、异常情况）
-4. 依赖接口列表（需要其他模块提供什么）
-5. 测试清单（正常流 + 异常流 + 边界值）
-
-所有命名必须符合 CLAUDE.md 规范。
-```
-
-**执行：**
-
-```bash
-claude "/create-spec T04 用户认证模块"
-claude "/create-spec T05 分类管理模块"
-claude "/create-spec T06 标签管理模块"
-claude "/create-spec T07 文章管理模块"
-claude "/create-spec T08 评论模块"
-claude "/create-spec T09 搜索模块"
-claude "/create-spec T10 浏览量统计模块"
-claude "/create-spec T11 热门排行模块"
-```
-
-**以 T04 为例，生成结果 `specs/impl-t04-auth.md`：**
-
-```markdown
-# T04: 用户认证模块 — 实现规格
-
-## 1. 涉及文件清单
-
-| 文件路径 | 类型 | 说明 |
-|---------|------|------|
-| blog-common/.../entity/User.java | Entity | 用户实体 |
-| blog-api/.../auth/mapper/UserMapper.java | Mapper | 用户数据访问 |
-| blog-api/.../resources/mapper/UserMapper.xml | XML | MyBatis SQL |
-| blog-common/.../utils/JwtUtils.java | Utils | JWT 生成/验证 |
-| blog-api/.../auth/service/AuthService.java | Interface | 认证服务接口 |
-| blog-api/.../auth/service/impl/AuthServiceImpl.java | Impl | 认证服务实现 |
-| blog-api/.../auth/controller/AuthController.java | Controller | 认证接口 |
-| blog-api/.../auth/dto/LoginRequest.java | DTO | 登录请求 |
-| blog-api/.../auth/dto/LoginResponse.java | DTO | 登录响应（含 Token） |
-| blog-api/.../auth/dto/RefreshTokenRequest.java | DTO | 刷新 Token 请求 |
-| blog-api/.../config/SecurityConfig.java | Config | Spring Security 配置 |
-| blog-api/.../config/JwtAuthFilter.java | Filter | JWT 校验过滤器 |
-| blog-api/.../test/.../auth/service/AuthServiceTest.java | Test | 单元测试 |
-| blog-api/.../test/.../auth/controller/AuthControllerTest.java | Test | 单元测试 |
-
-## 2. 核心方法签名
-
-### AuthService
-```java
-public interface AuthService {
-    LoginResponse login(LoginRequest request);
-    LoginResponse refreshToken(RefreshTokenRequest request);
-    void logout(Long userId);
-}
-```
-
-### AuthController
-```java
-@RestController
-@RequestMapping("/api/auth")
-public class AuthController {
-    @PostMapping("/login")
-    Result<LoginResponse> login(@Valid @RequestBody LoginRequest request);
-
-    @PostMapping("/refresh")
-    Result<LoginResponse> refreshToken(@Valid @RequestBody RefreshTokenRequest request);
-
-    @PostMapping("/logout")
-    @PreAuthorize("isAuthenticated()")
-    Result<Void> logout();
-}
-```
-
-## 3. 业务逻辑要点
-
-### 登录
-1. 参数校验：用户名和密码非空
-2. 查询用户：UserMapper.selectByUsername(username)
-3. 用户不存在 → 抛出 AuthException("用户名或密码错误")
-   （**不区分"用户不存在"和"密码错误"，防止撞库**）
-4. BCryptPasswordEncoder.matches(明文密码, 数据库密文) → 不匹配抛异常
-5. JwtUtils.generate(userId, username) → 生成 access_token(2h) + refresh_token(7d)
-6. 将 userId 存入 SecurityContext
-7. 返回 LoginResponse(accessToken, refreshToken, expiresIn)
-
-### Token 刷新
-1. 验证 refresh_token 有效性（签名 + 过期时间）
-2. 检查 refresh_token 是否在黑名单中（Redis: `blog:auth:blacklist:{token}`）
-3. 生成新的 access_token + refresh_token
-4. 将旧的 refresh_token 加入黑名单
-
-## 4. 异常定义
-| 异常类 | HTTP 状态码 | 错误码 | 触发条件 |
-|--------|-----------|--------|---------|
-| AuthException | 401 | 40100 | 用户名或密码错误 |
-| TokenExpiredException | 401 | 40101 | access_token 过期 |
-| TokenInvalidException | 401 | 40102 | Token 签名无效/被篡改 |
-| TokenBlacklistedException | 401 | 40103 | Token 已被加入黑名单 |
-
-## 5. 依赖接口
-- 无上游依赖（T04 是基础模块）
-- 提供给下游：SecurityContextHolder 中可获取当前登录用户 userId
-
-## 6. 测试清单
-- [ ] login_成功_返回Token对
-- [ ] login_用户名错误_返回401
-- [ ] login_密码错误_返回401
-- [ ] login_空参数_返回参数校验失败
-- [ ] refreshToken_有效Token_返回新Token对
-- [ ] refreshToken_过期Token_返回401
-- [ ] refreshToken_被黑名单Token_返回401
-- [ ] logout_清除Token
-- [ ] 未认证访问受保护接口_返回401
-- [ ] 认证后访问受保护接口_正常返回
-```
-
-> **规格文件的核心价值：** Agent 拿到这份规格后，**不需要做任何设计决策**——写几个文件、每个文件叫什么名字、方法签名是什么、业务逻辑的每一步、异常怎么处理、测试用例的名字，全部定死了。
-
----
-
-## 6.3 4c. 编写 API + DB 规格 → Behaviour Feedforward
+## 6.2 4b. 编写 API + DB 契约 → Behaviour Feedforward
 
 > **做什么？** 定义**所有模块必须遵守的契约**。多个 Agent 并行开发时，这是防止"合并地狱"的关键。
 >
-> **怎么理解？** 这是整个项目的"宪法"。4b 的实现规格是每个 Agent 的"工作图纸"，而 4c 是所有 Agent 共同遵守的"总则"。
+> **怎么理解？** 这是整个项目的"宪法"。后续 4c 的实现规格是每个 Agent 的"工作图纸"，而 4b 是所有 Agent 共同遵守的"总则"。
 
 ### specs/api-spec.md（接口契约）
 
-```markdown
+````markdown
 # 博客系统 API 规格 v1.0
 
 ## 通用规范
@@ -282,81 +157,64 @@ public class AuthController {
 
 ## 1. 认证接口
 
-### POST /api/auth/login
-Request: { "username": "admin", "password": "123456" }
-Response: { "code": 200, "data": { "accessToken": "...", "refreshToken": "...", "expiresIn": 7200 } }
-Errors: 40100 用户名或密码错误
-
-### POST /api/auth/refresh
-Request: { "refreshToken": "eyJhbG..." }
-Response: { "code": 200, "data": { "accessToken": "...", "refreshToken": "...", "expiresIn": 7200 } }
-Errors: 40101 Token 过期, 40102 Token 无效
-
-### POST /api/auth/logout
-Headers: Authorization: Bearer {access_token}
-Response: { "code": 200, "data": null }
+| 方法 | 路径 | 认证 | Request | Response | 错误码 |
+|------|------|------|---------|----------|--------|
+| POST | `/api/auth/login` | 否 | `{"username":"admin","password":"123456"}` | `{"accessToken":"...","refreshToken":"...","expiresIn":7200}` | 40100 用户名或密码错误 |
+| POST | `/api/auth/refresh` | 否 | `{"refreshToken":"eyJhbG..."}` | `{"accessToken":"...","refreshToken":"...","expiresIn":7200}` | 40101 Token 过期, 40102 Token 无效 |
+| POST | `/api/auth/logout` | 是 | — | null | — |
 
 ## 2. 分类接口
 
-### GET /api/categories — 树形列表（公开）
-Response: { "code": 200, "data": [{ "id": 1, "name": "后端开发", "children": [...] }] }
-### POST /api/categories — 创建（需认证）
-### PUT /api/categories/{id} — 更新（需认证）
-### DELETE /api/categories/{id} — 删除（需认证，有关联文章时返回 409）
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/categories` | 否 | 树形列表 |
+| POST | `/api/categories` | 是 | 创建分类 |
+| PUT | `/api/categories/{id}` | 是 | 更新分类 |
+| DELETE | `/api/categories/{id}` | 是 | 删除（有关联文章时返回 409） |
 
 ## 3. 标签接口
 
-### GET /api/tags — 分页列表（公开）
-Query: ?page=1&size=20&keyword=Java
-### POST /api/tags — 创建（需认证）
-### PUT /api/tags/{id} — 更新（需认证）
-### DELETE /api/tags/{id} — 删除（需认证，有文章关联时返回 409）
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/tags` | 否 | 分页列表 `?page=1&size=20&keyword=Java` |
+| POST | `/api/tags` | 是 | 创建标签 |
+| PUT | `/api/tags/{id}` | 是 | 更新标签 |
+| DELETE | `/api/tags/{id}` | 是 | 删除（有文章关联时返回 409） |
 
 ## 4. 文章接口
 
-### GET /api/articles — 列表（公开）
-Query: ?page=1&size=10&categoryId=2&tagId=5&keyword=Spring&status=PUBLISHED
-Response: { "code": 200, "data": { "records": [{ "id": 1, "title": "...", "summary": "...", "category": {...}, "tags": [...], "viewCount": 1234 }], "total": 100 } }
-
-### GET /api/articles/{slug} — 详情（公开）
-Response: { "code": 200, "data": { "id": 1, "title": "...", "content": "...", "htmlContent": "...", "category": {...}, "tags": [...], "prevArticle": {...}, "nextArticle": {...} } }
-
-### POST /api/articles — 创建（需认证）
-Request: { "title": "...", "slug": "...", "content": "...", "categoryId": 2, "tagIds": [5,6], "status": "DRAFT"|"PUBLISHED", "publishedAt": "..." }
-
-### PUT /api/articles/{id} — 更新（需认证）
-### DELETE /api/articles/{id} — 删除（需认证，软删除）
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/articles` | 否 | 列表 `?page=1&size=10&categoryId=2&tagId=5&keyword=Spring&status=PUBLISHED` |
+| GET | `/api/articles/{slug}` | 否 | 详情（含上一篇/下一篇） |
+| POST | `/api/articles` | 是 | 创建 `{"title":"...","slug":"...","content":"...","categoryId":2,"tagIds":[5,6],"status":"DRAFT"}` |
+| PUT | `/api/articles/{id}` | 是 | 更新 |
+| DELETE | `/api/articles/{id}` | 是 | 软删除 |
 
 ## 5. 评论接口
 
-### GET /api/articles/{articleId}/comments — 树形评论列表（公开）
-Response: { "code": 200, "data": { "records": [{ "id": 1, "content": "...", "nickname": "...", "replies": [...] }] } }
-
-### POST /api/articles/{articleId}/comments — 发表评论
-Request: { "content": "...", "nickname": "...", "email": "...", "website": "...", "parentId": null }
-游客评论默认 PENDING 状态，需审核
-
-### PUT /api/admin/comments/{id}/audit — 审核（需认证）
-### DELETE /api/admin/comments/{id} — 删除（需认证）
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/articles/{articleId}/comments` | 否 | 树形评论列表 |
+| POST | `/api/articles/{articleId}/comments` | 否 | 发表评论（游客，默认 PENDING 待审核） |
+| PUT | `/api/admin/comments/{id}/audit` | 是 | 审核评论 |
+| DELETE | `/api/admin/comments/{id}` | 是 | 删除评论 |
 
 ## 6. 搜索接口
 
-### GET /api/search — 全文搜索
-Query: ?keyword=Spring&categoryId=2&page=1&size=10
-Response: { "code": 200, "data": { "records": [{ "id": 1, "title": "...", "highlightTitle": "...", "highlightContent": "..." }], "total": 25 } }
-
-### GET /api/search/history — 搜索历史（需认证）
-### DELETE /api/search/history — 清除历史（需认证）
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/search` | 否 | 全文搜索 `?keyword=Spring&categoryId=2&page=1&size=10`，返回高亮 |
+| GET | `/api/search/history` | 是 | 搜索历史 |
+| DELETE | `/api/search/history` | 是 | 清除历史 |
 
 ## 7. 统计接口
 
-### GET /api/statistics/dashboard — 仪表盘（需认证）
-Response: { "code": 200, "data": { "totalArticles": 150, "totalComments": 2340, "todayViews": 356, "pendingComments": 5 } }
-
-### GET /api/statistics/articles/hot — 热门文章 TOP 10
-Query: ?period=WEEK|ALL
-
-### GET /api/statistics/tags — 标签使用统计
+| 方法 | 路径 | 认证 | 说明 |
+|------|------|------|------|
+| GET | `/api/statistics/dashboard` | 是 | 仪表盘：文章总数、评论总数、今日浏览、待审评论 |
+| GET | `/api/statistics/articles/hot` | 否 | 热门文章 TOP 10 `?period=WEEK|ALL` |
+| GET | `/api/statistics/tags` | 否 | 标签使用统计 |
 
 ## 错误码汇总
 
@@ -372,11 +230,11 @@ Query: ?period=WEEK|ALL
 | 40400 | 404 | 资源不存在 |
 | 40900 | 409 | 资源冲突 |
 | 50000 | 500 | 系统内部错误 |
-```
+````
 
 ### specs/db-schema.md（数据库契约）
 
-```markdown
+````markdown
 # 博客系统数据库规格 v1.0
 
 ## 通用约定
@@ -388,6 +246,7 @@ Query: ?period=WEEK|ALL
 ## DDL（6 张表）
 
 ### user 表
+```sql
 CREATE TABLE `user` (
   `id` BIGINT AUTO_INCREMENT, `username` VARCHAR(50) NOT NULL,
   `password` VARCHAR(200) NOT NULL, `nickname` VARCHAR(50),
@@ -398,8 +257,10 @@ CREATE TABLE `user` (
   `is_deleted` TINYINT(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`), UNIQUE KEY `uk_user_username` (`username`)
 );
+```
 
 ### category 表
+```sql
 CREATE TABLE `category` (
   `id` BIGINT AUTO_INCREMENT, `name` VARCHAR(50) NOT NULL,
   `slug` VARCHAR(50) NOT NULL, `parent_id` BIGINT DEFAULT NULL,
@@ -408,16 +269,20 @@ CREATE TABLE `category` (
   PRIMARY KEY (`id`), UNIQUE KEY `uk_category_slug` (`slug`),
   KEY `idx_category_parent_id` (`parent_id`)
 );
+```
 
 ### tag 表
+```sql
 CREATE TABLE `tag` (
   `id` BIGINT AUTO_INCREMENT, `name` VARCHAR(50) NOT NULL,
   `slug` VARCHAR(50) NOT NULL, `use_count` INT DEFAULT 0,
   `created_at` DATETIME, `updated_at` DATETIME, `is_deleted` TINYINT(1) DEFAULT 0,
   PRIMARY KEY (`id`), UNIQUE KEY `uk_tag_name` (`name`), UNIQUE KEY `uk_tag_slug` (`slug`)
 );
+```
 
 ### article 表
+```sql
 CREATE TABLE `article` (
   `id` BIGINT AUTO_INCREMENT, `title` VARCHAR(200) NOT NULL,
   `slug` VARCHAR(200) NOT NULL, `content` LONGTEXT NOT NULL,
@@ -432,15 +297,19 @@ CREATE TABLE `article` (
   KEY `idx_article_status_published_at` (`status`, `published_at`),
   FULLTEXT KEY `ft_article_title_content` (`title`, `content`)
 );
+```
 
 ### article_tag 关联表
+```sql
 CREATE TABLE `article_tag` (
   `id` BIGINT AUTO_INCREMENT, `article_id` BIGINT NOT NULL, `tag_id` BIGINT NOT NULL,
   `created_at` DATETIME, PRIMARY KEY (`id`),
   UNIQUE KEY `uk_article_tag` (`article_id`, `tag_id`)
 );
+```
 
 ### comment 表
+```sql
 CREATE TABLE `comment` (
   `id` BIGINT AUTO_INCREMENT, `article_id` BIGINT NOT NULL,
   `user_id` BIGINT, `parent_id` BIGINT, `reply_to` VARCHAR(50),
@@ -451,6 +320,7 @@ CREATE TABLE `comment` (
   `is_deleted` TINYINT(1) DEFAULT 0, PRIMARY KEY (`id`),
   KEY `idx_comment_article_id` (`article_id`)
 );
+```
 
 ## Redis Key 设计
 
@@ -462,6 +332,52 @@ CREATE TABLE `comment` (
 | `blog:article:view:{articleId}` | String | 无 | 文章浏览量 |
 | `blog:article:view:daily:{date}` | Hash | 30d | 每日访问统计 |
 | `blog:search:history:{userId}` | List | 7d | 搜索历史 |
+````
+
+---
+
+## 6.3 4c. 自定义 create-spec Skill 生成详细实现规格 → Behaviour Feedforward
+
+> **做什么？** 自定义一个 `create-spec` Skill，基于上一步的 API + DB 契约，对每个任务生成一份详细规格文件。
+>
+> **为什么在 4b 之后？** 实现规格需要引用 `api-spec.md` 和 `db-schema.md`，所以契约必须先定好。
+
+**Step 1：创建 Skill 文件 `.claude/skills/create-spec/SKILL.md`**
+
+```yaml
+---
+name: create-spec
+description: 根据 PRD + API/DB 契约生成指定模块的详细实现规格
+user-invocable: true
+argument-hint: "<task-number> <module-name>"
+---
+读取：
+- specs/PRD.md（需求来源）
+- specs/api-spec.md（接口契约）
+- specs/db-schema.md（数据库契约）
+- CLAUDE.md（命名和编码规范）
+
+为指定任务（如 T04）生成 specs/impl-t{xx}.md，包含：
+1. 涉及文件清单（每个 Java 类的完整路径）
+2. 核心方法签名（Service 接口和 Controller 端点）
+3. 业务逻辑要点（校验规则、边界条件、异常情况）
+4. 依赖接口列表（需要其他模块提供什么）
+5. 测试清单（正常流 + 异常流 + 边界值）
+
+所有命名必须符合 CLAUDE.md 规范。
+```
+
+**Step 2：执行**
+
+```bash
+claude "/create-spec T04 用户认证模块"
+claude "/create-spec T05 分类管理模块"
+claude "/create-spec T06 标签管理模块"
+claude "/create-spec T07 文章管理模块"
+claude "/create-spec T08 评论模块"
+claude "/create-spec T09 搜索模块"
+claude "/create-spec T10 浏览量统计模块"
+claude "/create-spec T11 热门排行模块"
 ```
 
 ---
@@ -801,12 +717,13 @@ echo "✅ 跨模块影响检查完成: $FILE"
 | `/sync-status` | 检查所有 worktree 的进度、编译状态、阻塞项 | 多 Agent 并行时看进度 |
 | `/security-check` | SQL 注入、XSS、密码硬编码等安全检查 | 上线前 |
 
-### .claude/skills/check-style.md
+### .claude/skills/check-style/SKILL.md
 
-```markdown
+```yaml
 ---
 name: check-style
 description: 检查代码是否符合 CLAUDE.md 命名规范
+user-invocable: true
 ---
 # 全局代码规范检查
 
@@ -826,12 +743,13 @@ description: 检查代码是否符合 CLAUDE.md 命名规范
 |------|------|---------|---------|---------|
 ```
 
-### .claude/skills/run-tests.md
+### .claude/skills/run-tests/SKILL.md
 
-```markdown
+```yaml
 ---
 name: run-tests
 description: 运行测试并生成报告
+user-invocable: true
 ---
 # 执行测试并汇总结果
 
@@ -846,12 +764,13 @@ description: 运行测试并生成报告
 - 覆盖率：Service 层 > 80%？ 总体 > 60%？
 ```
 
-### .claude/skills/sync-status.md
+### .claude/skills/sync-status/SKILL.md
 
-```markdown
+```yaml
 ---
 name: sync-status
 description: 同步所有 worktree 的开发进度
+user-invocable: true
 ---
 # 多 Agent 进度同步
 
@@ -864,12 +783,13 @@ description: 同步所有 worktree 的开发进度
 |----------|-------|---------|------|------|--------|
 ```
 
-### .claude/skills/security-check.md
+### .claude/skills/security-check/SKILL.md
 
-```markdown
+```yaml
 ---
 name: security-check
 description: 代码安全检查
+user-invocable: true
 ---
 # 安全检查
 
@@ -900,12 +820,12 @@ description: 代码安全检查
 │   ├── check-schema-sync.sh   ← 数据库同步检查（4e）
 │   └── on-code-change.sh      ← 跨模块影响检测（4e）
 └── skills/
-    ├── split-task.md           ← 拆任务（4a）
-    ├── create-spec.md          ← 生成规格（4b）
-    ├── check-style.md          ← 规范检查（4f）
-    ├── run-tests.md            ← 跑测试（4f）
-    ├── sync-status.md          ← 进度同步（4f）
-    └── security-check.md       ← 安全检查（4f）
+    ├── split-task/SKILL.md     ← 拆任务（4a）
+    ├── create-spec/SKILL.md    ← 生成规格（4b）
+    ├── check-style/SKILL.md    ← 规范检查（4f）
+    ├── run-tests/SKILL.md      ← 跑测试（4f）
+    ├── sync-status/SKILL.md    ← 进度同步（4f）
+    └── security-check/SKILL.md ← 安全检查（4f）
 
 specs/
 ├── PRD.md                      ← Step 3 产出

@@ -204,7 +204,136 @@ MCP（Model Context Protocol）是让 Claude Code 连接外部世界的"万能�
 
 ---
 
-## 七、Settings 常用配置
+## 七、自定义 Skill（进阶）
+
+上一节的自定义 Slash Command 是单文件格式（`.claude/commands/xxx.md`），适合简单指令。**Skill 是更强的版本**——目录结构、支持 frontmatter 配置、支持参数注入和子 agent 隔离。
+
+### 7.1 文件结构
+
+```
+.claude/skills/<skill-name>/
+├── SKILL.md           # 主指令文件（必需）
+├── template.md        # 模板文件（可选）
+└── examples/          # 示例输出（可选）
+```
+
+### 7.2 存放位置与作用域
+
+| 级别 | 路径 | 适用范围 |
+|------|------|---------|
+| 个人 | `~/.claude/skills/<name>/SKILL.md` | 你的所有项目 |
+| 项目 | `.claude/skills/<name>/SKILL.md` | 仅当前项目 |
+| 插件 | 插件的 `skills/` 子目录 | 启用该插件的地方 |
+
+命令名由**目录名**决定：`.claude/skills/deploy-staging/SKILL.md` → `/deploy-staging`
+
+> 不需要额外注册，放到目录下 Claude Code 自动发现，新建后无需重启即可用。
+
+### 7.3 SKILL.md 格式
+
+由 YAML frontmatter + Markdown 正文组成：
+
+```yaml
+---
+name: my-skill                 # 显示名称，默认取目录名
+description: 这个 skill 做什么   # 推荐填写，Claude 据此决定何时自动加载
+argument-hint: "[issue-number]" # 自动补全时的参数提示
+arguments: [issue, branch]      # 命名位置参数，正文中用 $issue 引用
+disable-model-invocation: true  # true = 禁止 Claude 自动加载，只能 /xxx 手动调用
+user-invocable: true            # false = 从 / 菜单隐藏，仅供 Claude 内部调用
+allowed-tools: Bash(git *)      # 激活时免确认的工具
+context: fork                   # 在隔离子 agent 中运行
+agent: Explore                  # 子 agent 类型（配合 context: fork 使用）
+model: inherit                  # 激活时使用的模型
+effort: high                    # 投入程度：low/medium/high/xhigh/max
+paths: "src/**/*.java"          # Glob 限制，只在处理匹配文件时自动激活
+---
+
+这里是 Markdown 正文，给 Claude 的具体指令。
+可以引用参数：$ARGUMENTS（全部）、$0/$1（按位置）、$issue（命名参数）
+可以注入动态内容：!`git diff HEAD`（执行命令，输出内联到 prompt）
+```
+
+### 7.4 实际示例
+
+**示例一：最简单的 skill（个人级）**
+
+```bash
+mkdir -p ~/.claude/skills/summarize-changes
+```
+
+`~/.claude/skills/summarize-changes/SKILL.md`：
+
+```yaml
+---
+description: Summarizes uncommitted changes and flags anything risky.
+---
+## Current changes
+!`git diff HEAD`
+
+## Instructions
+Summarize the changes above in 2-3 bullet points,
+then list any risks (missing error handling, hardcoded values, etc.).
+If the diff is empty, say there are no uncommitted changes.
+```
+
+使用：直接 `/summarize-changes`，或自然语言 "What did I change?" Claude 自动匹配。
+
+**示例二：带参数的 skill（项目级）**
+
+`.claude/skills/fix-issue/SKILL.md`：
+
+```yaml
+---
+name: fix-issue
+description: Fix a GitHub issue by number
+disable-model-invocation: true
+allowed-tools: Bash(gh *) Bash(git *)
+---
+Fix GitHub issue $ARGUMENTS following our coding standards.
+1. Read the issue: `gh issue view $ARGUMENTS`
+2. Understand requirements
+3. Implement the fix
+4. Write tests
+5. Create a commit
+```
+
+使用：`/fix-issue 123`
+
+**示例三：研究型 skill（子 agent 隔离）**
+
+```yaml
+---
+name: deep-research
+description: Research a topic thoroughly
+context: fork
+agent: Explore
+---
+Research $ARGUMENTS thoroughly:
+1. Find relevant files using Glob and Grep
+2. Read and analyze the code
+3. Summarize findings with specific file references
+```
+
+使用：`/deep-research MySQL indexing strategies`
+
+### 7.5 Skill vs Slash Command 对比
+
+| 维度 | Slash Command（`.claude/commands/`） | Skill（`.claude/skills/`） |
+|------|--------------------------------------|---------------------------|
+| 结构 | 单 `.md` 文件 | 目录 + `SKILL.md` |
+| 配置 | 无 frontmatter | 丰富 frontmatter（参数、权限、模型等） |
+| 参数 | `$ARGUMENTS` 仅此一种 | `$ARGUMENTS` + 位置参数 + 命名参数 |
+| 动态注入 | 不支持 | `` !`command` `` 注入命令输出 |
+| 子 agent | 不支持 | `context: fork` 隔离运行 |
+| 自动触发 | 不支持 | Claude 根据 description 自动匹配 |
+| 适用场景 | 简单固定流程 | 复杂工作流、需要参数和权限控制 |
+
+> 简单指令用 Slash Command，复杂工作流用 Skill。两者同名时，Skill 优先。
+
+---
+
+## 八、Settings 常用配置
 
 ```json
 {
@@ -221,9 +350,9 @@ MCP（Model Context Protocol）是让 Claude Code 连接外部世界的"万能�
 
 ---
 
-## 八、会话与项目管理（日常维护）
+## 九、会话与项目管理（日常维护）
 
-### 8.1 常用命令速查
+### 9.1 常用命令速查
 
 | 命令 | 作用 | 场景 |
 |------|------|------|
@@ -235,7 +364,7 @@ MCP（Model Context Protocol）是让 Claude Code 连接外部世界的"万能�
 | `/status` | 查看当前状态 | 诊断问题 |
 | `/export` | 导出对话到文件 | 保留重要对话 |
 
-### 8.2 三种工作模式
+### 9.2 三种工作模式
 
 | 模式 | 触发方式 | 适用场景 |
 |------|---------|---------|
@@ -243,21 +372,21 @@ MCP（Model Context Protocol）是让 Claude Code 连接外部世界的"万能�
 | Plan 模式 | Shift+Tab 两次 | 先规划再动手，复杂任务 |
 | Yolo 模式 | `claude --dangerously-skip-permissions` | 全权限放手干，重构 |
 
-### 8.3 会话管理技巧
+### 9.3 会话管理技巧
 
 - **随时暂停与回滚**：按 Esc 可暂停当前操作；双击 Esc 可恢复历史状态
 - **恢复历史会话**：`claude -c` 进入最近会话，`claude -r` 选择历史会话
 - **Shell 快捷方式**：在聊天框输入 `! <命令>` 直接执行 shell 命令并把输出带回对话
 
-### 8.4 Git Worktree 隔离
+### 9.4 Git Worktree 隔离
 
 对于大型重构，可以用 worktree 模式在隔离的 git 分支上操作，不影响主工作区，完成后再合并。
 
 ---
 
-## 九、避坑指南
+## 十、避坑指南
 
-### 9.1 常见问题
+### 10.1 常见问题
 
 | 问题 | 解决方案 |
 |------|---------|
@@ -265,7 +394,7 @@ MCP（Model Context Protocol）是让 Claude Code 连接外部世界的"万能�
 | AI 生成"虚假成功" | 在 CLAUDE.md 中加入："每次宣称成功必须附证据"；定期反问"真的完成了？有证据吗？" |
 | 上下文溢出 | 手动 `/compact` 压缩；注意观察 "Context left until auto-compact" 的提示 |
 
-### 9.2 安全建议
+### 10.2 安全建议
 
 - 不要在会话目录存放 SSH Key 等敏感信息
 - 敏感操作建议在 Docker 环境中执行
@@ -274,7 +403,7 @@ MCP（Model Context Protocol）是让 Claude Code 连接外部世界的"万能�
 
 ---
 
-## 十、维护清单
+## 十一、维护清单
 
 | 维护项 | 频率 | 说明 |
 |--------|------|------|
