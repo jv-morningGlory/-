@@ -1021,16 +1021,308 @@ spring.aop.proxy-target-class=false
 ```
 
 ### 31. `@Before`、`@After`、`@AfterReturning`、`@AfterThrowing`、`@Around` 的执行顺序是怎样的？
+
+**正常流程：**
+
+```
+@Around（前半段）
+  → @Before
+    → 目标方法执行
+  → @AfterReturning
+  → @After
+@Around（后半段）
+```
+
+**异常流程：**
+
+```
+@Around（前半段）
+  → @Before
+    → 目标方法抛异常
+  → @AfterThrowing
+  → @After
+@Around（后半段，catch 异常后不再继续）
+```
+
+> `@After` 类似 finally，无论正常还是异常都会执行。`@AfterReturning` 和 `@AfterThrowing` 二选一，不会同时触发。`@Around` 最外层，可以决定是否调用目标方法。
 ### 32. 你在项目中用 AOP 做过哪些事？具体怎么实现的？
+
+> 回答框架：做了什么 → 为什么用 AOP → 怎么做的（4 步）
+
+**我做过的两个场景：枚举翻译、用户数据脱敏。**
+
+#### 场景一：枚举翻译
+
+**业务背景**：接口返回的用户状态是 `0`/`1`/`2`，前端需要展示"正常"/"禁用"/"注销"。如果每个接口手动翻译，重复代码太多。
+
+**为什么用 AOP**：所有查询接口返回后都要做一次翻译，属于**横切关注点**，适合用切面统一处理。
+
+**实现步骤**：
+
+1. **明确业务是否需要做切面** — 多个接口都有同样的翻译需求，且翻译逻辑无业务耦合
+2. **明确切入时机** — 用 `@AfterReturning`，目标方法成功返回后对响应体做翻译
+3. **写切点表达式** — 匹配所有返回带 `@EnumTranslate` 注解字段的 DTO 的 Controller 方法
+4. **完成切面** — 反射扫描返回对象中带注解的字段，查枚举映射表替换值
+
+```java
+@Aspect
+@Component
+public class EnumTranslateAspect {
+
+    @AfterReturning(pointcut = "execution(* com.example.controller..*.*(..))", returning = "result")
+    public void translate(Result<?> result) {
+        Object data = result.getData();
+        if (data != null) {
+            translateEnums(data);  // 反射扫描 @EnumTranslate 字段并翻译
+        }
+    }
+}
+```
+
+#### 场景二：用户数据脱敏
+
+**业务背景**：用户列表、详情等接口返回的手机号、身份证号需要部分隐藏（如 `138****1234`）。
+
+**为什么用 AOP**：涉及用户敏感数据的接口很多，逐个手写脱敏逻辑容易遗漏，用切面统一拦截保证不漏。
+
+**实现步骤**：
+
+1. **明确业务是否需要做切面** — 涉及隐私合规，必须全量覆盖不能遗漏，适合切面兜底
+2. **明确切入时机** — 同样用 `@AfterReturning`，在数据返回给前端之前脱敏
+3. **写切点表达式** — 匹配返回用户信息的接口
+4. **完成切面** — 反射扫描带 `@SensitiveField(type=PHONE)` 注解的字段，按类型脱敏
+
+```java
+@Aspect
+@Component
+public class DataMaskingAspect {
+
+    @AfterReturning(pointcut = "execution(* com.example.controller..*.*(..))", returning = "result")
+    public void mask(Result<?> result) {
+        Object data = result.getData();
+        if (data != null) {
+            maskSensitiveFields(data);  // 反射扫描 @SensitiveField 字段并脱敏
+        }
+    }
+}
+```
+
+#### 总结：做切面的 4 步方法论
+
+| 步骤 | 要回答的问题 | 关键决策 |
+|------|-------------|---------|
+| ① 明确业务 | 这个需求是横切关注点吗？多个地方重复出现？ | 不是横切关注点就别硬用 AOP |
+| ② 确定时机 | 方法前（`@Before`）？方法后（`@AfterReturning`）？环绕（`@Around`）？ | 枚举翻译/脱敏都是改返回值，用 `@AfterReturning` |
+| ③ 写切点 | 切哪些包、哪些类、哪些方法？ | 范围太大会影响性能，太窄会遗漏 |
+| ④ 完成切面 | 注解驱动 or 表达式匹配？反射还是序列化拦截？ | 注解驱动（`@EnumTranslate`）更灵活，表达式匹配更省事 |
+
+> 面试加分点：主动说明**为什么不用其他方案**——枚举翻译也可以在 Service 层做，但每个方法都要调一次；脱敏也可以用 Jackson 序列化器，但切面方案更统一、不依赖具体框架。
 ### 33. AOP 的自调用问题是什么？为什么同一个类里调用 `@Transactional` 方法不走代理？怎么解决？
+
+**原因**：代理对象和目标对象是两个不同的对象。代理确实重写了所有方法，但方法内部的 `this` 指向的是**目标对象**，不是代理对象，所以 `this.methodB()` 绕过了代理。
+
+```java
+// 代理对象（Spring 生成的子类）
+class UserService$$Proxy {
+    private UserService target;  // 持有真正的目标对象
+
+    @Override
+    public void methodA() {
+        // 开启事务（切面逻辑）
+        target.methodA();  // 调用目标对象的方法
+        // 提交事务
+    }
+
+    @Override
+    public void methodB() {
+        // 开启事务（切面逻辑）
+        target.methodB();
+        // 提交事务
+    }
+}
+```
+
+```java
+// 目标对象（你写的原始类）
+@Service
+public class UserService {
+
+    @Transactional
+    public void methodA() {
+        // this 是 UserService 本身，不是 Proxy
+        // 所以绕过了代理，事务不生效
+        this.methodB();
+    }
+
+    @Transactional
+    public void methodB() {
+        // ...
+    }
+}
+```
+
+**调用链对比：**
+
+```
+外部调 methodA()：
+  Controller → Proxy.methodA()（事务生效）
+                → target.methodA()
+                    → this.methodB()  ← this 是 target，不是 Proxy
+                    → target.methodB()（没有经过 Proxy，事务不生效）
+
+外部直接调 methodB()：
+  Controller → Proxy.methodB()（事务生效）✅
+```
+
+**解决方式**（选一种）：
+
+1. **注入自身**：`@Autowired` 把自己注入进来，通过代理调用
+2. **`AopContext.currentProxy()`**：获取当前代理对象调用（需开启 `@EnableAspectJAutoProxy(exposeProxy = true)`）
+3. **拆到另一个类**：把方法移到别的 Service，天然走代理（推荐）
+
+> 一句话：代理包的是 target 的外壳，但 target 内部的 `this` 永远指向自己，不会指向代理。
 ### 34. Spring AOP 和 AspectJ 有什么区别？各自适用什么场景？
-
-## 五、事务管理（7 题）
-
 ### 35. Spring 的事务传播机制有哪几种？`REQUIRED`、`REQUIRES_NEW`、`NESTED` 有什么区别？你在项目中怎么选的？
+
+**7 种传播行为一览：**
+
+| 传播行为 | 有事务时 | 没事务时 | 用途 |
+|---------|---------|---------|------|
+| **REQUIRED**（默认） | 加入当前事务 | 新建一个 | 大多数场景的默认选择 |
+| **SUPPORTS** | 加入当前事务 | 非事务执行 | 查询方法 |
+| **MANDATORY** | 加入当前事务 | 抛异常 | 强制要求在事务中调用 |
+| **REQUIRES_NEW** | 挂起当前事务，新建一个 | 新建一个 | 独立事务，不受外层回滚影响 |
+| **NOT_SUPPORTED** | 挂起当前事务，非事务执行 | 非事务执行 | 不需要事务的操作 |
+| **NEVER** | 抛异常 | 非事务执行 | 强制要求不在事务中调用 |
+| **NESTED** | 在当前事务中创建保存点（Savepoint） | 新建一个 | 嵌套事务，内层可独立回滚 |
+
+**核心三者的区别（重点）：**
+
+```
+REQUIRED：methodA 和 methodB 共用同一个事务
+  methodA（事务T1）
+    → methodB（加入 T1）
+  B 异常 → A 和 B 一起回滚
+
+REQUIRES_NEW：methodB 挂起 A 的事务，自己开一个全新的
+  methodA（事务T1，挂起）
+    → methodB（事务T2，全新）
+  B 异常 → 只回滚 T2，T1 不受影响（除非 A 也抛异常）
+
+NESTED：methodB 在 A 的事务中设置一个保存点
+  methodA（事务T1）
+    → Savepoint
+    → methodB（嵌套在 T1 内）
+  B 异常 → 回滚到 Savepoint，A 继续执行
+  A 异常 → A 和 B 一起回滚
+```
+
+| 对比 | REQUIRED | REQUIRES_NEW | NESTED |
+|------|---------|-------------|--------|
+| 事务数量 | 1 个 | 2 个（内层全新） | 1 个（Savepoint 嵌套） |
+| 内层回滚影响外层 | ✅ 一起回滚 | ❌ 不影响 | ❌ 回滚到保存点，外层继续 |
+| 外层回滚影响内层 | ✅ 一起回滚 | ❌ 不影响 | ✅ 一起回滚 |
+| 性能 | 最好 | 较差（要挂起+新建连接） | 折中（Savepoint 很轻） |
+
+**项目中怎么选：**
+
+- **日志/审计记录** → 用 `REQUIRES_NEW`，主业务回滚了日志也不能丢
+- **批量处理中某条失败不影响整体** → 用 `NESTED`，失败回滚到保存点，继续处理下一条
+- **其余全部用 `REQUIRED`**（默认值），没必要别换
+
+> 面试一句话：绝大多数场景用 REQUIRED 就够；需要独立提交/回滚用 REQUIRES_NEW；想省钱又想内层可独立回滚用 NESTED。
 ### 36. `@Transactional` 注解在什么情况下会失效？列举至少 5 种场景。
+
+| # | 场景 | 原因 | 解决 |
+|---|------|------|------|
+| 1 | **同类自调用** | `this.methodB()` 绕过代理 | 拆类 / `AopContext.currentProxy()` |
+| 2 | **方法非 public** | Spring AOP 只拦截 public 方法 | 改为 public |
+| 3 | **方法被 final/static 修饰** | CGLIB 无法重写 final/static 方法 | 去掉 final/static |
+| 4 | **异常被 try-catch 吞掉** | 事务感知不到异常，不会回滚 | catch 后手动 `throw` 或 `setRollbackOnly()` |
+| 5 | **抛出 checked 异常** | 默认只回滚 `RuntimeException` 和 `Error` | `@Transactional(rollbackFor = Exception.class)` |
+| 6 | **数据库引擎不支持事务** | MyISAM 不支持事务 | 用 InnoDB |
+| 7 | **Bean 未被 Spring 管理** | 没加 `@Service` 等注解，不是 Spring Bean | 加上注解 |
+| 8 | **传播行为设错** | `NOT_SUPPORTED` / `NEVER` 本身就不用事务 | 检查 propagation 设置 |
+
+> 面试说前 5 个就够了，第 5 个顺带提一嘴 `rollbackFor = Exception.class` 是最佳实践。
 ### 37. 自调用导致事务失效怎么解决？除了把方法拆到另一个类还有别的办法吗？
+
+> 原理同第 33 题：`this.methodB()` 绕过代理，事务不生效。核心就是拿到代理对象来调用。
+
+**三种解决方式：**
+
+**① 注入自身（最常用）**
+
+```java
+@Service
+public class UserService {
+    @Autowired
+    private UserService self;  // 注入自己的代理对象
+
+    public void methodA() {
+        self.methodB();  // 通过代理调用，事务生效
+    }
+
+    @Transactional
+    public void methodB() { ... }
+}
+```
+
+> 注意：不会循环依赖，因为 Spring 三级缓存会先暴露早期引用。但如果构造器里就用会报 NPE。
+
+**② AopContext 获取当前代理**
+
+```java
+// 启动类加：
+@EnableAspectJAutoProxy(exposeProxy = true)
+
+// 使用：
+((UserService) AopContext.currentProxy()).methodB();
+```
+
+> 优点：不用注入自己，代码侵入小。缺点：依赖 Spring AOP 内部 API，且必须在 Spring 管理的线程内调用。
+
+**③ 拆到另一个类（最干净）**
+
+```java
+@Service
+public class UserService {
+    @Autowired
+    private OrderService orderService;
+
+    public void methodA() {
+        orderService.methodB();  // 天然走代理
+    }
+}
+```
+
+> 优点：没有 hack，符合设计原则。缺点：有时业务上两个方法就是属于同一个类，强行拆不合理。
+
+**面试怎么答**：先说三种方式，然后说"生产中简单场景用 `AopContext`，复杂场景优先拆类"。
 ### 38. 事务的隔离级别有哪些？分别能解决什么并发读问题？
+
+**三种并发读问题：**
+
+| 问题 | 含义 | 场景 |
+|------|------|------|
+| **脏读** | 读到了其他事务未提交的数据 | A 修改了余额但未提交，B 读到了修改后的值，A 回滚，B 读到的就是脏数据 |
+| **不可重复读** | 同一事务内两次读同一行，结果不同 | A 两次查余额，中间 B 修改并提交了，两次结果不一样 |
+| **幻读** | 同一事务内两次查询，行数不同 | A 查 age>20 的用户有 5 条，中间 B 插入了一条，再查变成 6 条 |
+
+**四个隔离级别：**
+
+| 隔离级别 | 脏读 | 不可重复读 | 幻读 | 性能 |
+|---------|------|-----------|------|------|
+| **READ UNCOMMITTED**（读未提交） | ❌ 可能 | ❌ 可能 | ❌ 可能 | 最快 |
+| **READ COMMITTED**（读已提交） | ✅ 避免 | ❌ 可能 | ❌ 可能 | 快 |
+| **REPEATABLE READ**（可重复读） | ✅ 避免 | ✅ 避免 | ❌ 可能 | 较慢 |
+| **SERIALIZABLE**（串行化） | ✅ 避免 | ✅ 避免 | ✅ 避免 | 最慢 |
+
+> MySQL InnoDB 默认 **REPEATABLE READ**，但通过 MVCC + Next-Key Lock 实际上也能避免大部分幻读。
+
+**Spring 怎么设置**：`@Transactional(isolation = Isolation.REPEATABLE_READ)`
+
+> 面试一句话：四个级别逐级增强，代价是并发性能下降。MySQL 默认 REPEATABLE READ，一般不需要改。Oracle 默认 READ COMMITTED。
 ### 39. 分布式事务你是怎么处理的？Seata 的 AT 模式和 TCC 模式有什么区别？
 ### 40. 为什么说"不要在事务里做 RPC 调用和 IO 操作"？你遇到过这个问题吗？
 ### 41. 声明式事务和编程式事务各有什么优缺点？你一般在什么场景用编程式事务？
