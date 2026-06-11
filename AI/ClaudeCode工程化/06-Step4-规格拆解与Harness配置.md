@@ -394,6 +394,16 @@ claude "/create-spec T11 热门排行模块"
 | **第2层：规范层** | `prompts/shared/naming.md` 等 | "命名怎么取？异常怎么处理？" | 偶尔 |
 | **第3层：任务层** | `prompts/impl/t04-auth.md` 等 | "这个任务要读哪些文件、按什么顺序做？" | 每个任务重新生成 |
 
+**Step 1：创建目录结构**
+
+```bash
+mkdir -p prompts/agents    # 第1层：角色定义
+mkdir -p prompts/shared    # 第2层：共享规范
+mkdir -p prompts/impl      # 第3层：任务执行指令
+```
+
+**Step 2：编写第1层 — 角色定义**
+
 ### prompts/agents/backend.md（Agent 角色定义）
 
 ```markdown
@@ -426,7 +436,9 @@ claude "/create-spec T11 热门排行模块"
 - 不要不使用 CLAUDE.md 规范就动手
 ```
 
-### prompts/shared/naming.md（命名检查清单）
+**Step 3：编写第2层 — 共享规范**
+
+创建 `prompts/shared/` 下的规范文件，每个文件聚焦一个关注点：
 
 ```markdown
 # 命名检查清单
@@ -461,58 +473,98 @@ claude "/create-spec T11 热门排行模块"
 | 删除 | delete | deleteArticle |
 ```
 
-### prompts/shared/error-handling.md（异常处理规范）
+**Step 4：用模板批量生成第3层 — 任务执行指令**
+
+> 不需要手写每个任务的提示词。4c 阶段已经生成了 `specs/impl-t{xx}-*.md`，这里只做一个通用的执行模板，Agent 执行时动态替换任务编号即可。
+
+创建一个通用模板 `prompts/impl/_template.md`：
 
 ```markdown
-# 异常处理规范
-
-- 业务异常继承 BusinessException（RuntimeException），包含 errorCode 和 message
-- 错误码：4xxxx 客户端错误，5xxxx 服务端错误
-- 用 @RestControllerAdvice 统一处理
-- 禁止在 Controller 中用 try-catch 吞异常
-- 禁止 return null 表示"没找到"
-- 禁止 e.printStackTrace()
-```
-
-### prompts/impl/t04-auth.md（任务执行指令示例）
-
-```markdown
-# T04: 用户认证模块 — 执行指令
+# T{XX}: {任务名称} — 执行指令
 
 ## 角色设定
 加载 prompts/agents/backend.md
 
 ## 目标
-实现 JWT 认证：登录签发 Token、Token 刷新、接口鉴权。
+{从 specs/impl-t{XX}-*.md 的概述中提取}
 
 ## 必需读取的文件
-1. specs/impl-t04-auth.md — 详细实现规格
+1. specs/impl-t{XX}-*.md — 详细实现规格
 2. specs/api-spec.md — 接口定义
-3. specs/db-schema.md — user 表结构
+3. specs/db-schema.md — 相关表结构
 4. CLAUDE.md — 命名和编码规范
 
 ## 必需遵守的规范
 加载 prompts/shared/naming.md
-加载 prompts/shared/error-handling.md
 
 ## 实现顺序（严格执行）
-1. Entity(User)
-2. Mapper(UserMapper + XML)
-3. JwtUtils
-4. SecurityConfig
-5. JwtAuthFilter
-6. AuthService / AuthServiceImpl
-7. AuthController
-8. DTO
-9. 单元测试
+{从 specs/impl-t{XX}-*.md 的文件清单中提取}
 
 ## 完成标准
 - [ ] mvn compile 通过
 - [ ] mvn test 通过
 - [ ] 命名符合 CLAUDE.md
-- [ ] Redis key 符合 `blog:auth:*` 格式
-- [ ] 更新 tasks/TASKS.md 勾选 T04
+- [ ] 更新 tasks/TASKS.md 勾选 T{XX}
 ```
+
+然后定义一个 `gen-task-prompt` Skill，自动从 specs 生成所有任务提示词：
+
+**创建 `.claude/skills/gen-task-prompt/SKILL.md`：**
+
+```yaml
+---
+name: gen-task-prompt
+description: 根据 specs/impl-t{xx}-*.md 批量生成任务执行指令
+user-invocable: true
+---
+读取 tasks/TASKS.md 获取所有任务编号和名称。
+对每个任务：
+1. 读取 specs/impl-t{xx}-*.md 提取目标、文件清单、实现顺序
+2. 用 prompts/impl/_template.md 模板填充
+3. 输出到 prompts/impl/t{xx}-{name}.md
+规则：
+- 角色设定和规范引用保持不变（所有任务共享）
+- 目标、文件清单、实现顺序从对应的 spec 中提取
+- 完成标准统一使用模板中的标准
+```
+
+**执行：**
+
+```bash
+claude "/gen-task-prompt"
+```
+
+> **效果：** 10 个任务 = 执行一次命令，自动生成 10 份 `prompts/impl/t{xx}-*.md`。不需要逐个手写。
+
+**Step 5：在 CLAUDE.md 中声明提示词目录**
+
+在项目根目录的 `CLAUDE.md` 中添加提示词目录说明，让 Agent 启动时自动感知提示词体系的存在：
+
+```markdown
+## 提示词体系
+
+本项目使用三层提示词驱动 Agent 编码：
+- 角色层：`prompts/agents/` — Agent 角色定义，所有 Agent 共享
+- 规范层：`prompts/shared/` — 命名、异常处理等规范，所有 Agent 共享
+- 任务层：`prompts/impl/` — 每个任务的执行指令，按任务编号命名
+
+开始任何任务前，必须先读取对应的任务执行指令文件（`prompts/impl/t{xx}-*.md`）。
+```
+
+**Step 6：执行任务时加载提示词**
+
+启动 Agent 执行具体任务时，通过命令行参数或提示词引用加载三层文件：
+
+```bash
+# 方式1：直接在命令中指定加载提示词
+claude "读取 prompts/impl/t04-auth.md 按其中的指令执行"
+
+# 方式2：结合 split-task Skill 批量执行
+claude "/split-task"  # 先拆任务
+claude "按 tasks/TASKS.md 的顺序，从 T01 开始，每次读取对应的 prompts/impl/ 文件执行"
+```
+
+> **最佳实践：** 任务层文件中已通过"加载 prompts/agents/backend.md"和"加载 prompts/shared/naming.md"声明了依赖。Agent 读到这些引用后会自动去读取对应文件，你不需要在命令行中重复指定。
 
 ---
 
