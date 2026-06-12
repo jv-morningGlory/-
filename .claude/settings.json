@@ -17,7 +17,8 @@
       "Bash(python3 -c \"import sqlite3; conn = sqlite3.connect\\('/c/Users/heyoufeng/AppData/Roaming/ynote-desktop/m13042296286@163.com/ynote-data/m13042296286@163.com.db'\\); cursor = conn.cursor\\(\\); cursor.execute\\(\\\\\"SELECT name FROM sqlite_master WHERE type='table'\\\\\"\\); print\\([row[0] for row in cursor.fetchall\\(\\)]\\)\")",
       "Bash(python3 -c ' *)",
       "Bash(python3 -c 'import sqlite3,sys;conn=sqlite3.connect\\(sys.argv[1]\\);c=conn.cursor\\(\\);c.execute\\(\"SELECT name FROM sqlite_master WHERE type=\\\\x27table\\\\x27\"\\);print\\([r[0] for r in c.fetchall\\(\\)]\\)' \"C:/Users/heyoufeng/AppData/Roaming/ynote-desktop/m13042296286@163.com/ynote-data/m13042296286@163.com.db\")",
-      "Bash(python3 query_youdao.py)"
+      "Bash(python3 query_youdao.py)",
+      "mcp__md2pdf__md2pdf"
     ],
     "additionalDirectories": [
       "C:\\Users\\heyoufeng\\Desktop\\随笔\\__TRACKED_VAR__\\.claude"
