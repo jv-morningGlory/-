@@ -16,11 +16,38 @@
       "Bash(code --version)",
       "Bash(code --uninstall-extension bierner.markdown-mermaid)",
       "Bash(code --uninstall-extension yzhang.markdown-all-in-one)",
-      "Bash(rm -rf \"c:/Users/heyoufeng/.vscode/extensions/bierner.markdown-mermaid-1.32.1\")"
+      "Bash(rm -rf \"c:/Users/heyoufeng/.vscode/extensions/bierner.markdown-mermaid-1.32.1\")",
+      "Bash(git pull *)",
+      "Bash(git config *)",
+      "Bash(git stash *)",
+      "Bash(git add *)",
+      "Bash(where node *)",
+      "Read(//c/Program Files/nodejs/**)",
+      "Bash(cmd.exe /c \"where node\")",
+      "Bash(ls \"C:\\\\Program Files\\\\nodejs\\\\\" 2>/dev/null || ls \"/c/Program Files/nodejs/\" 2>/dev/null || ls \"/mnt/c/Program Files/nodejs/\" 2>/dev/null || echo \"not in Program Files\"; ls \"C:\\\\Users\\\\13042\\\\AppData\\\\Roaming\\\\nvm\\\\\" 2>/dev/null || echo \"no nvm\")",
+      "Read(//c/Program Files/nodejs\" 2>/dev/null || ls /c/**)",
+      "Bash(powershell.exe -Command \"Get-Command node -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source; Get-Command npm -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source\")",
+      "Bash(ls \"C:\\\\Users\\\\13042\\\\AppData\\\\Local\\\\Programs\\\\Microsoft VS Code\\\\Code.exe\" 2>/dev/null && echo \"VS Code found\" || echo \"not here\")",
+      "Read(//c/Users/13042/AppData/Local/Programs/Microsoft VS Code/**)",
+      "Bash(ls \"d:/java/Microsoft VS Code/Code.exe\" && echo \"VS Code found\")",
+      "Read(//d/java/Microsoft VS Code/**)",
+      "Bash(cmd.exe //c \"npm --version 2>&1 && npm install 2>&1\")",
+      "Read(//c/Users/13042/**)",
+      "Read(//c/Program Files/**)",
+      "Bash(ELECTRON_RUN_AS_NODE=1 \"d:/java/Microsoft VS Code/Code.exe\" -e \"console.log\\('Node.js version:', process.version\\)\")",
+      "Bash(ELECTRON_RUN_AS_NODE=1 \"d:/java/Microsoft VS Code/Code.exe\" -e \"const {execSync} = require\\('child_process'\\); try { const r = execSync\\('npm --version', {encoding:'utf8'}\\); console.log\\('npm:', r.trim\\(\\)\\); } catch\\(e\\) { console.log\\('npm not found'\\); }\")",
+      "Bash(/c/Users/13042/AppData/Local/Microsoft/WindowsApps/python.exe --version)",
+      "Bash(ELECTRON_RUN_AS_NODE=1 \"d:/java/Microsoft VS Code/Code.exe\" -e \"try { require\\('electron'\\); console.log\\('electron available'\\); } catch\\(e\\) { console.log\\('electron not available:', e.message\\); }\")",
+      "Bash(winget list *)",
+      "Bash(winget install *)",
+      "Bash(npm --version)",
+      "Bash(mkdir -p \"/c/Users/13042/Desktop/md-pdf\" && echo \"文件夹已创建\")",
+      "WebFetch(domain:www.nowcoder.com)"
     ],
     "additionalDirectories": [
       "c:\\Users\\heyoufeng\\Desktop\\随笔\\中间件\\mysql",
-      "c:\\Users\\heyoufeng\\.vscode\\extensions\\bierner.markdown-mermaid-1.32.1"
+      "c:\\Users\\heyoufeng\\.vscode\\extensions\\bierner.markdown-mermaid-1.32.1",
+      "C:\\Users\\13042\\Desktop"
     ]
   }
 }

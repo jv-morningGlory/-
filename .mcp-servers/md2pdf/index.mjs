@@ -5,7 +5,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, rmSync } from 'fs';
 import { resolve, dirname, extname, basename } from 'path';
 import { createRequire } from 'module';
 
@@ -141,10 +141,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 <body>${htmlBody}</body>
 </html>`;
 
-    // 用 page.setContent 直接设置内容，绕过 HTTP Server（Chrome 149 loopback 问题）
+    // 写入临时 HTML 文件到 md 同目录，使相对路径图片能通过 file:// 协议正确加载
+    const tmpHtmlPath = inputPath.replace(/\.md$/i, '.tmp.html');
+    writeFileSync(tmpHtmlPath, fullHtml, 'utf-8');
+
     const browser = await puppeteer.launch({ headless: true });
     const page = await browser.newPage();
-    await page.setContent(fullHtml, { waitUntil: 'networkidle0', timeout: 60000 });
+    // 用 goto file:// 而非 setContent，确保页面 origin 为 file://，从而能加载相对路径图片
+    const fileUrl = `file:///${encodeURI(tmpHtmlPath.replace(/\\/g, '/'))}`;
+    await page.goto(fileUrl, { waitUntil: 'networkidle0', timeout: 60000 });
     const pdfBuffer = await page.pdf({
       format: 'A4',
       margin: { top: '20mm', bottom: '20mm', left: '15mm', right: '15mm' },
@@ -152,6 +157,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     });
     await page.close();
     await browser.close();
+
+    // 清理临时 HTML
+    try { rmSync(tmpHtmlPath); } catch (_) {}
 
     if (!pdfBuffer || pdfBuffer.length === 0) {
       return {
