@@ -10,118 +10,36 @@
 
 ### 1. Spring Boot 相比传统 Spring 框架做了什么改进？为什么现在大家都在用？
 
-> **第一，内嵌容器，开箱即用。** 传统 Spring 需要单独部署 Tomcat，打成 war 包丢到容器里跑。Spring Boot 直接把 Tomcat/Jetty/Undertow 内嵌进了 jar 包，一个 `java -jar` 就能启动，开发、测试、部署的体验都极大简化了。
+> **一句话总结：** Spring 是"提供能力"的基础框架（IoC/AOP），Spring Boot 是"帮你把 Spring 用起来"的脚手架—。
+
+> 第一，内嵌容器tomcat，开箱即用。
 >
-> **第二，Starter 机制，一键集成。** 以前整合 MyBatis、Redis、MQ 这些框架，要一个一个找 Maven 依赖、解决版本冲突，非常痛苦。Spring Boot 提供了各种 Starter，比如你引入 `spring-boot-starter-data-redis`，它自动帮你拉好所有兼容的依赖，版本也不用你操心。
+> 第二，Starter 机制，一键集成，某个功能的maven依赖统一管理好。
 >
-> **第三，约定优于配置。** 这是 Spring Boot 最核心的设计理念。它给几乎所有常见场景都预设了合理的默认值——端口默认 8080、数据源默认 HikariCP、静态资源默认放 `static` 目录。你只有不按约定来的时候才需要手动配置，90% 的情况零配置就能跑起来，极大减少了配置文件的体积和维护成本。
+> 第三，约定优于配置，springboot对很多组件都有默认配置，当用户偏移这些配置的之后，需要用户添加自己的约定。
 
 ### 2. `@SpringBootApplication` 注解内部由哪几个注解构成？各自负责什么？
 
-> `@SpringBootApplication` 是一个组合注解，由三个核心注解构成：
+=
 >
 > **① `@SpringBootConfiguration`** — 本质就是 `@Configuration`，标记当前类是 Spring 的配置类，会被注册到 IoC 容器中。
 >
-> **② `@EnableAutoConfiguration`** — Spring Boot 的灵魂。它会借助 `AutoConfigurationImportSelector`，从 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 文件中读取所有候选的自动配置类，然后根据条件注解（`@ConditionalOnClass`、`@ConditionalOnMissingBean` 等）按需加载。这就是为什么你引入了 `spring-boot-starter-web` 之后不用做任何配置就能直接写 Controller 的原因。
+> **② `@EnableAutoConfiguration`** —`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 文件中读取所有候选的自动配置类 ，然后按需加载默认配置 。
 >
-> **③ `@ComponentScan`** — 开启组件扫描，默认扫描当前启动类所在包及其子包下的 `@Component`、`@Service`、`@Repository`、`@Controller` 等注解的类，将它们注册为 Bean。**注意：**如果你把启动类放在根包下，而业务代码放到了别的包里没被扫描到，Bean 就不会被注册，这是个很常见的坑。
+> **③ `@ComponentScan`** —  扫描指定包下`@Component`、`@Service`、`@Repository`、`@Controller` 等注解的类，将它们注册为 Bean。
 >
 > > **追问预警：** "那我想扫描别的包怎么办？" → 用 `@SpringBootApplication(scanBasePackages = "com.xxx")` 或在启动类上额外加 `@ComponentScan("com.xxx")` 指定扫描路径。
 
-### 3. Spring Boot 的约定大于配置体现在哪些地方？举几个实际例子。
 
-> 约定优于配置不是"不用配置"，而是**你不说话的时候，我按规矩来；你有意见的时候，我按你说的改。** 体现在这几个层面：
->
-> **① Maven 依赖管理。** `spring-boot-starter-parent` 帮你锁定了海量第三方依赖的版本号，你只需声明用哪个 Starter，不用再操心各个 jar 包的版本兼容问题——Spring Boot 替你做好了版本仲裁。
->
-> **② Starter 自动配置。** 引入 `spring-boot-starter-data-redis`，Spring Boot 约定你用 `localhost:6379`，没有密码；如果你 Redis 在内网另一台机器上，就得在配置文件里写 `spring.redis.host` 和 `spring.redis.port` 来覆盖约定。引入 `spring-boot-starter-data-jpa`，约定连接池用 HikariCP、自动建表策略默认 `none`——都能改，但不改就能跑。
->
-> **③ 项目结构。** 约定启动类放在根包下，`@ComponentScan` 默认扫描这个包及其子包；静态资源放 `classpath:/static` 或 `/resources`；模板文件放 `classpath:/templates`。按这个目录结构来，零配置就能访问 `localhost:8080/index.html`，不按约定就要手动配 `spring.web.resources.static-locations`。
->
-> **④ 配置文件。** 约定配置文件叫 `application.properties` 或 `application.yml`，放 `src/main/resources` 下，Spring Boot 自动加载。多环境也遵循约定——`application-dev.yml`、`application-prod.yml`，只需在 `application.yml` 里设 `spring.profiles.active: dev` 就自动切好了。
->
-> **⑤ 内嵌容器。** 约定用 Tomcat，端口 8080。想换 Undertow 就 exclude Tomcat 再引入 Undertow；想换端口就 `server.port=9090`——不配，就按约定来。
 
 ### 4. Spring Boot 的启动流程是怎样的？`SpringApplication.run()` 内部做了哪些关键步骤？
 
-> 一句话概括：**判断应用类型 → 加载扩展 → 准备环境 → 创建容器 → `refresh()`（自动配置生效 + Bean 实例化）→ 回调 Runner。**
->
-> 具体拆成七个步骤：
->
-> **阶段一：启动准备**
->
-> **① 推断应用类型。** 通过检查 classpath——有 `DispatcherServlet` 就是 Servlet Web 应用，有 `DispatcherHandler` 但没有 `DispatcherServlet` 就是响应式（Reactive）应用，啥都没有就是普通应用。这决定了后续创建什么类型的 `ApplicationContext`。
->
-> **② 加载初始化器和监听器。** 从 `META-INF/spring.factories`（3.x 改为 `AutoConfiguration.imports`）中加载 `ApplicationContextInitializer` 和 `ApplicationListener`，让你在容器刷新前后能做自定义扩展。
->
-> **阶段二：环境准备**
->
-> **③ 准备 Environment。** 创建 `Environment` 对象，加载所有配置源并按优先级合并。优先级从高到低：
->
-> | 优先级 | 来源 | 示例 |
-> |--------|------|------|
-> | 1（最高） | 命令行参数 | `--server.port=9999` |
-> | 2 | JVM 系统属性（`-D`） | `-Dserver.port=8081` |
-> | 3 | OS 环境变量 | `SERVER_PORT=8081` |
-> | 4 | `application-{profile}.yml` | `application-prod.yml` |
-> | 5（最低） | `application.yml` | 默认配置文件 |
->
-> 规律：**越靠近运行时的优先级越高**（命令行 `--` > JVM `-D` > 环境变量 > profile 配置 > 默认配置）。同一 key 被多处配置时，高优先级覆盖低优先级。
->
-> **④ 打印 Banner + 创建容器。** 就是启动时那个 Spring 大字，同时创建一个空的 `ApplicationContext`。
->
-> **阶段三：容器刷新（最核心）**
->
-> **⑤ `refresh()` 刷新容器。** 对应 `AbstractApplicationContext.refresh()`，内部十几步，核心的几个：
-> - `obtainFreshBeanFactory()`：解析配置，注册 `BeanDefinition`
-> - `invokeBeanFactoryPostProcessors()`：**执行 `BeanFactoryPostProcessor`，自动配置在这步生效**
-> - `registerBeanPostProcessors()`：注册 `BeanPostProcessor`（AOP 代理就靠它）
-> - `finishBeanFactoryInitialization()`：**实例化所有非懒加载的单例 Bean**
->
-> **⑥ 自动配置生效。** 在第⑤步中，`ConfigurationClassPostProcessor` 解析 `@Configuration` 类，触发 `AutoConfigurationImportSelector` 加载所有候选自动配置类，再由条件注解（`@ConditionalOnClass` 等）决定哪些真正生效。
->
-> **阶段四：收尾**
->
-> **⑦ 回调 Runner。** 容器启动完成后，执行 `CommandLineRunner` 和 `ApplicationRunner`。常用于启动后初始化数据、预热缓存、检查依赖服务等。
+> 一句话概括：**推断应用类型 → 加载扩展 → 准备环境 → 创建容器 → `refresh()`（自动配置生效 + Bean 实例化）→ 回调 Runner。**
+
+推断应用类型：web类型、响应式类型、普通的类型
+加载扩展： spring有很多固定的拓展点 ，这些
 
 
-
-### 5. Spring Boot 为什么能通过 main 方法直接启动，不需要外部 Tomcat？
-
-> 传统 Spring 需要打成 war 包部署到外部 Tomcat，Tomcat 负责启动 Servlet 容器、加载应用。Spring Boot 不需要这些，因为它**把容器内嵌进了 jar 包**。
->
-> **核心原理：**
->
-> **① 内嵌 Servlet 容器。** 引入 `spring-boot-starter-web` 后，依赖里自带了 Tomcat 的 jar 包（`spring-boot-starter-tomcat`）。Spring Boot 启动时不是等外部容器来加载你，而是自己 new 一个 Tomcat 实例出来，把 DispatcherServlet 注册上去，监听端口——整个过程都在 JVM 内部完成。
->
-> **② `main()` 方法就是入口。** `SpringApplication.run()` 做了两件事：创建 Spring 容器（`ApplicationContext`）+ 启动内嵌 Tomcat。Tomcat 作为 Spring Bean 的一部分被管理和启动，不需要外部进程。
->
-> **③ 打包方式。** 用 `spring-boot-maven-plugin` 打成可执行 jar，里面通过 `MANIFEST.MF` 指定 `Main-Class` 为 `JarLauncher`，它负责加载嵌套 jar 里的依赖，然后调用你的 `main()` 方法。所以一个 `java -jar app.jar` 就能跑起来。
->
-> | | 传统 Spring | Spring Boot |
-> |---|---|---|
-> | **打包方式** | war 包 | 可执行 jar 包 |
-> | **容器** | 外部 Tomcat（独立进程） | 内嵌 Tomcat（同一 JVM） |
-> | **启动方式** | 部署到 Tomcat，Tomcat 启动应用 | `java -jar` 直接启动 |
-> | **换容器** | 换 Tomcat 版本或换 Jetty | exclude Tomcat，引入 Undertow/Jetty 依赖即可 |
->
-> ```xml
-> <!-- 想换 Undertow，排除默认 Tomcat -->
-> <dependency>
->     <groupId>org.springframework.boot</groupId>
->     <artifactId>spring-boot-starter-web</artifactId>
->     <exclusions>
->         <exclusion>
->             <groupId>org.springframework.boot</groupId>
->             <artifactId>spring-boot-starter-tomcat</artifactId>
->         </exclusion>
->     </exclusions>
-> </dependency>
-> <dependency>
->     <groupId>org.springframework.boot</groupId>
->     <artifactId>spring-boot-starter-undertow</artifactId>
-> </dependency>
-> ```
 
 ### 6. `CommandLineRunner` 和 `ApplicationRunner` 的区别是什么？你在项目中用过吗？
 

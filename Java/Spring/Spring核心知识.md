@@ -330,108 +330,81 @@ app.api.url: #{'http://' + '${app.host}' + ':' + '${app.port}' + '/api'}
 
 ---
 
-## 九、Log4j2 日志
+## 九、日志（Logback / SLF4J）
 
-### 9.1 核心概念
+> Spring Boot 默认日志实现是 **Logback**（配 `logback-spring.xml`）；Log4j2、Logback 都是 SLF4J 的实现，核心机制一致。
+
+### 9.1 核心三件套
 
 | 概念 | 作用 |
 |------|------|
-| **Logger** | 记录什么日志（定义日志类别和级别） |
-| **Appender** | 日志输出到哪儿（控制台、文件、远程等） |
+| **Logger** | 按"包名"分类的记录器，决定**记什么、什么级别** |
+| **Appender** | 决定日志**输出到哪**（控制台、滚动文件等） |
+| **Layout/Pattern** | 决定日志**长什么样** |
 
-### 9.2 Appender 类型
+### 9.2 Logger 与 Root：一棵按包名分的树
 
-| Appender | 用途 |
-|----------|------|
-| **Console** | 输出到控制台（SYSTEM_OUT / SYSTEM_ERR） |
-| **RollingRandomAccessFile** | 滚动日志文件（按时间/大小归档） |
-| **GELF** | 发送到 Graylog 等日志收集系统 |
+logger 按**包名**（`.` 为层级）组成树，`root` 是唯一的根节点 + 兜底默认值，必须存在。
 
-**Console 配置示例**：
-```xml
-<Console name="STDOUT" target="SYSTEM_OUT">
-    <PatternLayout pattern="${logfile.pattern}"/>
-</Console>
-
-<Console name="STDERR" target="SYSTEM_ERR">
-    <PatternLayout pattern="${logfile.pattern}"/>
-    <Filters>
-        <ThresholdFilter level="ERROR" onMatch="ACCEPT" onMismatch="DENY"/>
-    </Filters>
-</Console>
+```
+root (INFO)               ← 兜底默认级别
+├── org.springframework    ← 未单独配置 → 继承 root
+└── org.jeecg.modules      ← <logger> 单独管这一支
 ```
 
-```bash
-# SYSTEM_OUT → app.log, SYSTEM_ERR → error.log
-nohup java -jar app.jar 1>app.log 2>error.log &
-```
+**两条核心规则：**
 
-**滚动日志配置**：
-```xml
-<RollingRandomAccessFile
-    name="SERVICE_LOG_FILE"
-    fileName="${logfile.path}/service.log"
-    filePattern="${logfile.arch.path}/service-%d{yyyy-MM-dd}-%i.log.gz">
-    <Policies>
-        <TimeBasedTriggeringPolicy/>
-    </Policies>
-    <DefaultRolloverStrategy/>
-</RollingRandomAccessFile>
-```
-
-归档目录结构：
-```
-/data/logs/myapp/
-├── service.log                  # 当前活跃日志
-└── 2024-01/
-    ├── service-2024-01-20-1.log.gz
-    ├── service-2024-01-21-1.log.gz
-    └── service-2024-01-22-1.log.gz
-```
-
-### 9.3 GELF（Graylog Extended Log Format）
+1. **级别继承**：logger 没显式设 level，就用父级的，一直到 root。
+2. **Appender 冒泡**（`additivity` 默认 true）：日志从命中的 logger **一路向上**经过所有祖先的 appender → logger 不挂 appender 也能借 root 的 appender 输出。
 
 ```xml
-<Gelf name="GELF-SERVICE"
-      facility="SOA-SERVICE"
-      host="${gelf.host}" port="${gelf.port}"
-      version="1.1"
-      extractStackTrace="true" filterStackTrace="true"
-      mdcProfiling="true" includeFullMdc="true"
-      maximumMessageSize="8192"
-      originHost="%host{fqdn}">
-    <Field name="logTime" pattern="${timestamp.pattern}"/>
-    <Field name="severity" pattern="%p"/>
-    <Field name="className" pattern="%C"/>
-    <DynamicMdcFields regex="mdc.*"/>
-</Gelf>
+<logger name="org.jeecg.modules" level="DEBUG" />  <!-- 只调级别，输出走 root 的 appender -->
+
+<root level="INFO">
+    <appender-ref ref="STDOUT" />
+    <appender-ref ref="FILE" />
+</root>
 ```
 
-### 9.4 Logger 配置
-
-```xml
-<!-- ROOT：所有 logger 的父类 -->
-<Root level="info">
-    <AppenderRef ref="STDOUT"/>
-    <AppenderRef ref="SERVICE_LOG_FILE"/>
-</Root>
-
-<!-- 特定包路径的 logger -->
-<Logger name="com.alibaba.nacos" level="WARN" additivity="false">
-    <AppenderRef ref="STDERR"/>
-    <AppenderRef ref="SERVICE_LOG_FILE"/>
-</Logger>
-```
-
-> 为什么需要单独配置第三方 Logger？ROOT 通常定义为 INFO 级别，但第三方组件（如 MyBatis）默认可能输出 DEBUG 或 WARN 级别，不单独配置就无法被 ROOT 捕获。`additivity="false"` 防止日志重复输出到父 logger。
-
-### 9.5 日志级别
+### 9.3 有效级别与过滤
 
 ```
-DEBUG < INFO < WARN < ERROR < FATAL
+DEBUG < INFO < WARN < ERROR
 ```
 
-配置 `level="info"` 表示 >= INFO 的日志都会输出。
+- **有效级别** = 命中 logger 的 level，没有则继承父级直到 root。
+- 日志级别 **≥ 有效级别**才输出。
+
+| 类（举例） | 命中 logger | 有效级别 | 打 DEBUG |
+|------------|------------|----------|----------|
+| `org.jeecg.modules.Xxx` | `org.jeecg.modules` | DEBUG | ✅ |
+| `org.springframework.xxx` | 无 → 继承 root | INFO | ❌ |
+
+### 9.4 additivity：防重复输出
+
+给 logger **单独挂 appender** 时，默认仍会冒泡到 root 的 appender → 同一条日志打两遍。设 `additivity="false"` 断链，只走自己的 appender。
+
+### 9.5 实战：让 MyBatis 的 SQL 进日志
+
+SQL 打印是 **MyBatis + Logback 两侧接力**，各管一环：
+
+```
+MyBatis 产生 SQL
+   │  log-impl = Slf4jImpl    ← MyBatis 配置：SQL 交给 SLF4J
+   ▼
+SLF4J（logger 名 = 当前 Mapper 接口全限定名）
+   ▼
+Logback（org.jeecg.modules=DEBUG 继承接住）→ 控制台 + 文件
+```
+
+| 配置 | 归属 | 管什么 |
+|------|------|--------|
+| `mybatis-plus.configuration.log-impl` | application.yml（MyBatis） | SQL **走哪条管道**：`Slf4jImpl`→归 Logback；`StdOutImpl`→绕过 Logback 只进控制台；`NoLoggingImpl`→不输出 |
+| `logback-spring.xml` | Logback | 经 SLF4J 进来的日志**按包名怎么输出**（级别 + appender） |
+
+> 为什么 `org.jeecg.modules=DEBUG` 能接住 SQL？MyBatis 用 **Mapper 接口全限定名**作为 SQL 的 logger 名，业务 Mapper 都长在 `org.jeecg.modules` 子树下，被继承覆盖到了。
+>
+> **易错**：网上流传的 `java.sql.Connection/Statement/PreparedStatement`、`org.apache.ibatis` 对 MyBatis-Plus 打 SQL **无效**（前者是纯 JDBC 时代 logger 名，MyBatis 不往那写；后者是框架自身日志，非 SQL 本体）。真正起作用的是业务 Mapper 包级别。
 
 ---
 

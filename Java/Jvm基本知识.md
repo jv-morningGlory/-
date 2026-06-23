@@ -1,5 +1,31 @@
 # JVM 基本知识
 
+## JDK / JRE / JVM 的关系
+
+**包含关系**：JDK ⊃ JRE ⊃ JVM
+
+```text
+JDK（Java Development Kit，开发工具包）
+├── JRE（Java Runtime Environment，运行环境）
+│   ├── JVM（Java Virtual Machine）— 执行 .class 字节码的核心
+│   └── 核心类库（rt.jar / java.base 等标准 API）
+└── 开发工具（javac、javadoc、jps、jstack 等）
+```
+
+| 概念 | 全称 | 作用 | 谁需要 |
+|------|------|------|--------|
+| **JDK** | Java Development Kit | 开发 + 运行 Java 程序 | 开发者 |
+| **JRE** | Java Runtime Environment | 运行 Java 程序 | 仅运行程序的用户 |
+| **JVM** | Java Virtual Machine | 执行字节码，跨平台的核心 | — |
+
+**关键认知**：
+
+- JVM 只认 `.class` 字节码，不关心源码；**跨平台靠的是 JVM**——同一份字节码能在不同系统的 JVM 上跑（"一次编写，到处运行"）
+- **JDK 是 JRE 的超集**：装了 JDK 即含 JRE，能开发也能运行
+- JDK 11+ 起不再单独发布 JRE（模块化后用 `jlink` 按需生成运行镜像）
+
+> 一句话：**JDK = JRE + 开发工具；JRE = JVM + 核心类库；JVM 是执行字节码的核心。**
+
 ## 一、JVM 内存结构
 
 ```
@@ -111,11 +137,67 @@ public class Singleton {
 
 ### 2.4 破坏双亲委派
 
-**SPI 场景**：`DriverManager` 由 Java 提供（Bootstrap 加载），但第三方 `Driver` 实现需要 AppClassLoader 加载。
+**典型场景：JDBC SPI**
 
-解决方案：`DriverManager` 静态模块中通过 `Thread.currentThread().getContextClassLoader()` 获取 AppClassLoader。
+| 类 | 由谁加载 | 位置 |
+|------|------|------|
+| `java.sql.DriverManager` | **Bootstrap**（最顶层） | `JAVA_HOME/lib` 核心类 |
+| `com.mysql.cj.jdbc.Driver` | **AppClassLoader** | classpath 下第三方 jar |
 
-> Launcher 初始化时将 AppClassLoader 保存到线程上下文，创建新线程时会复制父线程的上下文类加载器。
+**矛盾**：`DriverManager` 要加载第三方 `Driver`，但双亲委派**只能向上委托、不能向下找人**。Bootstrap 已是最顶层，没有父加载器可委托，看不到 classpath 下的类 → 核心类需要反过来使用下层加载器，单向链走不通。
+
+**解决方案：线程上下文类加载器（TCCL）**
+
+`Thread.currentThread().getContextClassLoader()` 返回一个运行时注入的类加载器，`DriverManager` 通过它拿到 AppClassLoader 去"借力"加载第三方 Driver。
+
+> 双亲委派走不通的路，靠 TCCL 这个"绕道"走通。
+
+**TCCL 从哪来：Launcher 初始化**
+
+- JVM 启动时 `sun.misc.Launcher` 创建 AppClassLoader，并把它设到主线程上
+- 主线程里 `getContextClassLoader()` 默认返回 AppClassLoader
+
+**子线程为何也能拿到**：`Thread` 构造函数会复制父线程的 TCCL
+
+```java
+// Thread.init()
+this.contextClassLoader = parent.contextClassLoader;  // 继承父线程
+```
+
+> 不管在哪个线程，TCCL 始终指向能加载应用类的加载器。
+
+**Spring Boot 中 DriverManager 的加载流程**
+
+Spring 不改变 DriverManager 的加载机制，差异只在**触发时机**和 **TCCL 的值**（Spring Boot 的 TCCL 是 `LaunchedURLClassLoader`，能看到 `BOOT-INF/lib` 下的驱动）。
+
+```text
+Spring Boot main 启动
+        │
+        ▼
+jar launcher 创建 LaunchedURLClassLoader
+        │  并把它设为主线程 TCCL ← 关键
+        ▼
+加载 @SpringBootApplication，初始化 IoC 容器
+        │
+        ▼
+初始化 DataSource Bean（HikariCP，默认）
+        │
+        ▼  首次需要物理连接（建初始连接 or 首次借出）
+HikariCP.newConnection()
+        │
+        ▼
+DriverManager.getConnection(url, user, pwd)  ← 首次主动引用！
+        │
+        ▼  ① 双亲委派加载 DriverManager 类（Bootstrap，核心库）
+        │  ② static{} → loadInitialDrivers() → SPI 扫描
+        │  ③ ServiceLoader 用 TCCL（= LaunchedURLClassLoader）
+        │     读 BOOT-INF/lib 的 META-INF/services/java.sql.Driver
+        ▼  ④ TCCL 加载 mysql Driver 并实例化 → 注册到 registeredDrivers
+getConnection() 返回连接
+        │
+        ▼
+HikariCP 包装成池化连接，归还连接池
+```
 
 ---
 
@@ -136,14 +218,7 @@ public class Singleton {
 | **标记-清除** | 标记需回收对象，统一清除 | 效率不高；产生内存碎片 |
 | **标记-整理** | 标记存活对象，移动到一端，清除边界外 | 移动成本（但存活率高时移动少） |
 
-### 3.3 分代回收策略
-
-| 区域 | 特点 | 适用算法 |
-|------|------|----------|
-| 新生代 | 存活率低 | 复制算法 |
-| 老年代 | 存活率高 | 标记-清除 / 标记-整理 |
-
-### 3.4 垃圾回收器
+### 3.3 垃圾回收器
 
 | 版本 | 默认收集器 |
 |------|-----------|
@@ -159,19 +234,49 @@ public class Singleton {
 | Old Region | 长期存活对象 |
 | Humongous Region | 巨型对象（超过 Region 一半大小） |
 
-核心优势：可局部收集，只回收部分 Region，不暂停整个堆。
+核心优势：可局部收集，只回收部分 Region，不回收整个堆。
 
-### 3.5 GC 类型
+**G1 的 STW 机制（常见误区）**：G1 **仍会 STW**，目标是"停顿可控"而非"零停顿"。
 
-| GC 类型 | 作用区域 | 触发条件 |
+```bash
+-XX:MaxGCPauseMillis=200   # 默认 200ms，每次回收尽量不超过该时间
+```
+
+| GC 类型 | 是否 STW | 回收范围 |
 |---------|---------|---------|
-| **Minor GC** | 新生代 | Eden 满 |
-| **Major GC** | 老年代 | 老年代空间不足 |
-| **Full GC** | 整个堆 | Minor GC 后老年代空间不足存放晋升对象 |
+| **Young GC** | 是 | 年轻代 Region |
+| **Mixed GC** | 是 | 全部年轻代 + **部分**老年代（G1 招牌：渐进式清老年代） |
+| **Full GC** | 是（很慢） | 整个堆，失败兜底，需极力避免 |
+
+> G1 有 STW，但 STW 的是"部分 Region"而非"整个堆"，且时间可预测。ZGC / Shenandoah 才把停顿压到 <10ms。
+
+**G1 vs Parallel GC（为什么 JDK 9+ 默认改用 G1）**：
+
+| 维度 | Parallel GC | G1 |
+|------|-------------|-----|
+| 设计目标 | **吞吐量优先** | **停顿时间可控** |
+| 堆结构 | 物理分代（连续） | Region 化（逻辑分代） |
+| 回收单位 | 整个新生代/老年代 | 部分 Region |
+| STW 特点 | 整片 STW，**随堆增大变长** | 部分 Region STW，可设目标时间 |
+| 大堆表现 | >6GB 停顿不可接受 | 大堆下仍可控 |
+
+**G1 的代价**：额外内存（每 Region 维护记忆集，约占堆 5%~20%）、吞吐略低于 Parallel。
+
+**选择标准**：
+
+| 场景 | 选择 |
+|------|------|
+| 批处理 / 离线计算，追求吞吐量，堆 < 4GB | Parallel GC |
+| Web 服务 / 交互应用，对延迟敏感，堆 > 4GB | G1 |
+| 要求停顿 <10ms（交易系统、超大堆） | ZGC / Shenandoah |
+
+> JDK 9+ 默认 G1，因为现代应用大多是延迟敏感的 Web 服务，而非吞吐型批处理。
 
 ---
 
 ## 四、四种引用类型
+
+> **本质**：引用类型 = 保住对象不被回收的能力等级。强引用死保，软引用看内存脸色，弱引用随时丢，虚引用形同虚设（只为收尸通知）。
 
 | 引用类型 | 实现类 | 回收时机 | 影响生命周期 |
 |---------|--------|---------|------------|
@@ -187,74 +292,18 @@ public class Singleton {
 
 ---
 
-## 五、JDK 诊断工具
+## 五、JVM 参数
 
-### 5.1 jps — 查看 Java 进程
+### 5.1 参数分类与优先级
 
-```bash
-jps -lvm
-```
+**4 类参数来源**：
 
-| 选项 | 说明 |
-|------|------|
-| `-m` | 输出传递给 main 方法的参数 |
-| `-l` | 输出主类的完整包名或 jar 路径 |
-| `-v` | 输出传递给 JVM 的参数 |
-
-### 5.2 jmap — 堆快照分析
-
-```bash
-# 查看堆配置与使用情况
-jmap -heap <pid>
-
-# 生成 Heap Dump
-jmap -dump:format=b,file=heapdump.hprof <pid>
-```
-
-> 使用 MAT（Memory Analyzer）分析 dump 文件。
-
-### 5.3 jstat — GC 监控
-
-```bash
-jstat -gcutil <pid>
-```
-
-输出示例与解读：
-
-| 指标 | 含义 | 正常范围 |
-|------|------|---------|
-| S0/S1 | Survivor 区使用率 | 0%-50% |
-| E | Eden 区使用率 | 70%-90% 需注意 |
-| O | 老年代使用率 | <70% |
-| M | 元空间使用率 | <80% |
-| YGC | Young GC 次数 | — |
-| FGC | Full GC 次数 | 0（频繁则异常） |
-| GCT | GC 总耗时 | <5% 运行时间 |
-
-> jstat 只能实时查看，如需保留日志需启动时添加 GC 日志参数。
-
-### 5.4 jstack — 线程快照
-
-```bash
-# 基本用法
-jstack <pid> > thread_dump.txt
-
-# 包含锁信息（推荐）
-jstack -l <pid> > thread_dump_with_locks.txt
-```
-
----
-
-## 六、JVM 参数
-
-### 6.1 参数分类
-
-| 类型 | 来源 | 示例 |
-|------|------|------|
-| **环境参数** | 操作系统 | `JAVA_HOME` |
-| **JVM 参数** | `-X` / `-XX` | `-Xmx2g`, `-XX:+UseG1GC` |
-| **系统参数** | `-D` 定义 | `-Dfile.encoding=UTF-8` |
-| **Spring Boot 参数** | `--` 前缀 | `--server.port=9090` |
+| 类型 | 前缀/来源 | 说明 | 示例 |
+|------|----------|------|------|
+| **环境参数** | 操作系统环境变量 | OS 注入，`System.getenv()` 读取 | `JAVA_HOME`、`SERVER_PORT=9090` |
+| **JVM 参数** | `-X` / `-XX` | 控制 JVM 运行（堆、栈、GC），**不属应用配置** | `-Xmx2g`、`-XX:+UseG1GC` |
+| **系统参数** | `-D` | 系统属性（System Property），`System.getProperty()` 读取 | `-Dserver.port=9090` |
+| **配置文件参数** | `application.yml` | Spring Boot 配置文件，项目内维护 | `server.port: 8080` |
 
 ```bash
 java -Xmx2g -XX:+UseG1GC \
@@ -263,7 +312,20 @@ java -Xmx2g -XX:+UseG1GC \
      --server.port=9090
 ```
 
-### 6.2 常用调优参数
+**配置优先级**（同一配置项多处设置时，最终生效哪个）：
+
+> `-X` / `-XX` 控制 JVM 自身，不属应用配置范畴，**不参与覆盖比较**。
+
+| 优先级 | 来源 | 示例 |
+|--------|------|------|
+| 1（最高） | 命令行参数 `--` | `--server.port=9090` |
+| 2 | JVM 系统属性 `-D` | `-Dserver.port=9090` |
+| 3 | 操作系统环境变量 | `SERVER_PORT=9090` |
+| 4（最低） | 配置文件 `application.yml` | `server.port: 8080` |
+
+> 口诀：命令行 > 系统属性 > 环境变量 > 配置文件。高优先级覆盖低优先级，低优先级仅作兜底。
+
+### 5.2 常用调优参数
 
 ```bash
 java -Xms4g -Xmx4g \
@@ -296,9 +358,9 @@ java -Xms4g -Xmx4g \
 
 ---
 
-## 七、常见面试题
 
-### 7.1 内存泄漏 vs 内存溢出
+
+## 六、内存泄漏 vs 内存溢出
 
 | 概念 | 定义 |
 |------|------|
@@ -310,35 +372,9 @@ java -Xms4g -Xmx4g \
 2. 未关闭的资源（Connection、InputStream 未调 `close()`）
 3. 内部类持有外部类隐式引用（非静态内部类被长期引用导致外部类无法回收）
 
-### 7.2 GC 问题排查流程
-
-**现象**：线上 CPU 飙升、响应变慢，`top` 显示 Load Average 15（4核机器），Java 进程 CPU 382.6%。
-
-**排查步骤**：
-
-1. **`top -Hp <pid>`** — 定位高 CPU 线程
-   ```
-   GC task thread#0 (ParallelGC)  → 78.6% CPU
-   GC task thread#1 (ParallelGC)  → 78.2% CPU
-   ```
-   → GC 线程大量消耗 CPU，业务线程几乎挂起
-
-2. **`jstat -gcutil <pid> 1000`** — 实时观察 GC 状态
-   ```
-   O = 99.8%（老年代几乎满）
-   FGC 每秒+1（Full GC 频繁）
-   FGC 后 O 几乎不下降（仅释放 0.02%）
-   E = 100%（Young GC 无法正常工作）
-   ```
-   → **频繁且无效的 Full GC**，内存泄漏典型特征
-
-3. **`jmap -dump`** — 生成堆转储，用 MAT 分析定位泄漏点
-
-> 总结口诀：top 看整体 → top -Hp 定位线程 → jstat 取 GC 证据 → jmap 拿 dump 分析。
-
 ---
 
-## 八、JDK 开发工具速览
+## 七、JDK 开发工具速览
 
 | 工具 | 作用 |
 |------|------|

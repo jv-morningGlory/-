@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "md2pdf": {
-      "command": "node",
-      "args": [".mcp-servers/md2pdf/index.mjs"]
-    }
-  }
-}
