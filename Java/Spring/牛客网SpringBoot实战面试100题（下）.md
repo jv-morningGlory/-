@@ -1,9 +1,5 @@
 # 牛客网 Spring Boot 实战面试 100 题（下）
 
-> 来源：牛客网面经 + 大厂高频真题 + 场景设计题
-> 说明：本题库偏向**实战与场景**，每题均为真实面试出现过的题目
-> 本篇涵盖：第 30-100 题（AOP、事务、MVC、数据库、缓存、MQ、微服务、安全、监控、场景设计）
-
 ---
 
 ## 四、AOP 面向切面编程（5 题）
@@ -12,13 +8,64 @@
 
 **实现原理：**
 
-Spring AOP 基于**动态代理**。容器启动时，通过 `BeanPostProcessor`（`AbstractAutoProxyCreator`）对目标 Bean 创建代理对象。调用时先走代理的拦截逻辑（advice），再调用目标方法，实现横切逻辑（日志、事务、缓存等）与业务代码解耦。
+Spring AOP 基于**动态代理**。
 
-> **核心流程：** 目标 Bean 初始化后 → `postProcessAfterInitialization()` → 判断是否有切面匹配 → 创建代理对象替换原 Bean 放入容器。
+#### 代理生成的完整时机（结合 Bean 生命周期 + 三级缓存）
+
+> **正常情况**下，代理在 Bean 初始化之后生成；如果存在**循环依赖**，代理会**提前**生成。下面这张图把创建 Bean 的完整源码流程（`doCreateBean`）和依赖注入、代理生成都串起来：
+
+```
+doGetBean("A")
+  │
+  ├─ getSingleton("A")          // ① 查一二三级缓存
+  │     一级(成品) → 二级(早期) → 三级(工厂)
+  │     命中直接返回；没命中 → 继续 createBean
+  │
+  └─ createBean("A")
+        │
+        └─ doCreateBean("A")
+              │
+              ├─ createBeanInstance()        ②【实例化】反射调构造方法 → 半成品对象
+              │
+              ├─ addSingletonFactory("A", ObjectFactory)
+              │     ③ 把"工厂"丢进【第三级缓存】← 循环依赖时代理从这里提前出来
+              │        (注意：此刻还没生成代理，只是登记了能生成代理的能力)
+              │
+              ├─ populateBean()              ④【依赖注入 / 属性注入】@Autowired 在这
+              │     │
+              │     └─ 注入 B → 又触发 doGetBean("B") → B 也走到这一步注入 A
+              │           │
+              │           └─ B 要 A，查缓存：一二三级都没有成品 → 命中三级工厂
+              │                 ─────────────────────────────────────────
+              │                 getEarlyBeanReference("A")  ★ 提前生成 A 的代理
+              │                 把 A 的代理放进【第二级缓存】返回给 B
+              │                 ─────────────────────────────────────────
+              │                 (仅当 A 存在循环依赖，才会走这条提前路径)
+              │
+              └─ initializeBean()            ⑤【初始化】（此时 Bean 还在"裸"状态）
+                    │
+                    ├─ invokeAwareMethods()         BeanNameAware/BeanFactoryAware...
+                    │
+                    ├─ applyBeanPostProcessors
+                    │     └─ BeforeInitialization   @PostConstruct 在这(CommonAnnotationBP)
+                    │
+                    ├─ invokeInitMethods()          afterPropertiesSet + init-method
+                    │
+                    └─ applyBeanPostProcessors
+                          └─ AfterInitialization
+                                └─ AbstractAutoProxyCreator
+                                     .postProcessAfterInitialization()
+                                        → wrapIfNecessary() → createProxy()
+                                        ★★★ 正常情况下，代理在这里生成 ★★★
+```
+
+> **一个 Bean 变成代理的时机不确定，有两种可能：**
+> - 如果它在**属性注入阶段被循环依赖地需要**了 → 提前在 `getEarlyBeanReference()` 变成代理；
+> - 否则 → 在初始化之后、`BeanPostProcessor` 的 `after` 方法里变成代理。
 
 ---
 
-**JDK 动态代理 vs CGLIB 代理**
+#### JDK 动态代理 vs CGLIB 代理
 
 | 维度 | JDK 动态代理 | CGLIB 代理 |
 |------|------------|-----------|
@@ -29,21 +76,149 @@ Spring AOP 基于**动态代理**。容器启动时，通过 `BeanPostProcessor`
 
 > **关键限制：** 目标类为 `final` 或方法为 `final` 时，CGLIB 无法代理。
 
-**Spring Boot 默认用哪个？**
+**代码实现对比：**
 
-- Spring Boot（Spring 5+）**默认使用 CGLIB**（`spring.aop.proxy-target-class=true`）。
-- 只有当显式设置 `proxy-target-class=false` 且目标类实现了接口时，才回退到 JDK 动态代理。
-- 即：**不设参数 → 一律 CGLIB**。
+**① JDK 动态代理** —— 必须有接口，靠 `Proxy.newProxyInstance` + `InvocationHandler`：
 
 ```java
-// Spring Boot 默认配置（application.properties 无需额外设置）
-spring.aop.proxy-target-class=true
-spring.aop.auto=true
+// 1. 接口（必须有！）
+public interface UserService {
+    String findById(Long id);
+}
+
+// 2. 目标对象
+public class UserServiceImpl implements UserService {
+    public String findById(Long id) { return "User-" + id; }
+}
+
+// 3. 调用处理器：增强逻辑 + 反射调用 target
+public class LogHandler implements InvocationHandler {
+    private final Object target;                    // 持有目标对象
+    public LogHandler(Object target) { this.target = target; }
+
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        System.out.println("[前置] " + method.getName());
+        Object result = method.invoke(target, args);   // 反射调真实方法
+        System.out.println("[后置] 返回 " + result);
+        return result;
+    }
+}
+
+// 4. 生成代理
+UserService proxy = (UserService) Proxy.newProxyInstance(
+        target.getClass().getClassLoader(),
+        target.getClass().getInterfaces(),   // ← 传"接口列表"
+        new LogHandler(target));
+proxy.findById(1L);
 ```
 
+**② CGLIB** —— 不需要接口，靠 `Enhancer` + `MethodInterceptor`，生成子类：
+
 ```java
-// 强制使用 JDK 动态代理
-spring.aop.proxy-target-class=false
+// 1. 目标类（普通类，无需接口）
+public class OrderService {
+    public String findById(Long id) { return "Order-" + id; }
+}
+
+// 2. 方法拦截器：增强逻辑 + invokeSuper 调父类
+public class LogInterceptor implements MethodInterceptor {
+    @Override
+    public Object intercept(Object obj, Method method, Object[] args, MethodProxy proxy) throws Throwable {
+        System.out.println("[前置] " + method.getName());
+        Object result = proxy.invokeSuper(obj, args);   // 调父类（= 目标类）方法
+        System.out.println("[后置] 返回 " + result);
+        return result;
+    }
+}
+
+// 3. 生成代理
+Enhancer enhancer = new Enhancer();
+enhancer.setSuperclass(OrderService.class);   // ← 传"父类（目标类）"
+enhancer.setCallback(new LogInterceptor());
+OrderService proxy = (OrderService) enhancer.create();
+proxy.findById(1L);
+```
+
+> **从代码一眼看出区别：**
+> - **JDK**：`Proxy.newProxyInstance` + `InvocationHandler` + `method.invoke(target)` → 要有接口，handler 里**持有 target**，靠反射调真实方法。
+> - **CGLIB**：`Enhancer` + `MethodInterceptor` + `proxy.invokeSuper(obj)` → 不要接口，代理对象**自己就是子类**、没有独立 target，调 `super` 就是目标逻辑。
+
+#### 一个 Bean 被多个切面（AOP）增强，代理怎么处理？怎么拿代理？
+
+> **核心结论：不管一个 Bean 被多少个切面增强，Spring 只会为它生成一个代理对象。** 多个 advice（`@Before`/`@Around`/事务等）被组装成一条**拦截器链（Interceptor Chain）**挂在同一个代理上，调用时按顺序依次执行。这跟手写代理"一个 InvocationHandler 对应一个代理"完全不同。
+
+**① 为什么是一个代理而不是多个？**
+
+Spring 在 `postProcessAfterInitialization` 创建代理时，会把**所有匹配该 Bean 的 advice 一次性收集起来**，封装进**一个**代理（`JdkDynamicAopProxy` 或 `CglibAopProxy`）。代理内部持有一个 `List<MethodInterceptor>`，方法调用按链式执行：
+
+```
+proxy.method()
+   └─ 拦截器链（按 @Order 顺序，从外到内）：
+        切面A @Around(前) → 切面B @Before → 事务拦截器 → 【目标方法】
+                                                            │
+                                  返回时反向：事务 → @AfterReturning → 切面A @Around(后)
+```
+
+**② 多个切面的执行顺序怎么控制？—— 用 `@Order`**
+
+给切面类加 `@Order`（**值越小优先级越高，越在外层**），或实现 `Ordered` 接口：
+
+```java
+@Aspect
+@Component
+@Order(1)   // 先执行，最外层
+public class LogAspect { ... }
+
+@Aspect
+@Component
+@Order(2)   // 后执行，嵌套在 LogAspect 里面
+public class TransactionAspect { ... }
+```
+
+> 不加 `@Order` 时顺序不确定（取决于 Bean 注册顺序），所以**多切面务必显式指定 `@Order`**。
+
+**③ 怎么拿到这个（被多切面增强的）代理对象？**
+
+正常情况下，注入拿到的 `userService` **已经是代理对象了**（Spring 自动用代理替换了原 Bean），直接用就行——所有切面都挂在它身上：
+
+```java
+@Service
+public class OrderService {
+    @Autowired
+    private UserService userService;   // 这个就是唯一代理，所有切面都在上面
+
+    public void doSomething() {
+        userService.findById(1L);      // 走完整拦截器链：日志 → 事务 → 真实方法
+    }
+}
+```
+
+如果是**同类自调用**要绕过 `this` 拿代理（详见第 33/37 题），拿到的也是那同一个代理（本来就只有一个）：
+
+```java
+// 方式1：注入自身
+@Autowired
+private UserService self;   // self 就是那个唯一代理
+
+// 方式2：AopContext（需 @EnableAspectJAutoProxy(exposeProxy = true)）
+UserService proxy = (UserService) AopContext.currentProxy();
+```
+
+**④ 手写 CGLIB 时，怎么给一个代理挂多个拦截器？（了解原理）**
+
+手写时一个代理也能挂多个 `Callback`，用 `setCallbacks` + `setCallbackFilter` 决定每个方法走哪个：
+
+```java
+Enhancer enhancer = new Enhancer();
+enhancer.setSuperclass(OrderService.class);
+enhancer.setCallbacks(new Callback[]{ logInterceptor, transactionInterceptor, NoOp.INSTANCE });
+enhancer.setCallbackFilter(method -> {           // 返回下标，决定该方法用哪个拦截器
+    if (method.getName().startsWith("save"))  return 1;  // save 走事务拦截器
+    if (method.getName().startsWith("find"))  return 0;  // find 走日志拦截器
+    return 2;                                             // 其他不增强
+});
+OrderService proxy = (OrderService) enhancer.create();
 ```
 
 ### 31. `@Before`、`@After`、`@AfterReturning`、`@AfterThrowing`、`@Around` 的执行顺序是怎样的？
