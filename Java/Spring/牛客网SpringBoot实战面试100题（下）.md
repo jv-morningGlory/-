@@ -4,7 +4,7 @@
 
 ## 四、AOP 面向切面编程（5 题）
 
-### 30. AOP 的实现原理是什么？JDK 动态代理和 CGLIB 代理有什么区别？Spring Boot 默认用哪个？
+### 30. AOP 的实现原理是什么？
 
 **实现原理：**
 
@@ -65,161 +65,7 @@ doGetBean("A")
 
 ---
 
-#### JDK 动态代理 vs CGLIB 代理
 
-| 维度 | JDK 动态代理 | CGLIB 代理 |
-|------|------------|-----------|
-| 实现方式 | `java.lang.reflect.Proxy` 生成接口实现类 | 字节码生成（ASM），子类化目标类 |
-| 目标要求 | 目标类必须有**接口** | 目标类无需接口（但必须是非 `final` 类） |
-| 性能 | 创建慢、调用快（JDK 1.8+ 已优化） | 创建快（有缓存）、调用略慢 |
-| 方法拦截 | 只能拦截**接口方法** | 可拦截类及父类的 public 方法 |
-
-> **关键限制：** 目标类为 `final` 或方法为 `final` 时，CGLIB 无法代理。
-
-**代码实现对比：**
-
-**① JDK 动态代理** —— 必须有接口，靠 `Proxy.newProxyInstance` + `InvocationHandler`：
-
-```java
-// 1. 接口（必须有！）
-public interface UserService {
-    String findById(Long id);
-}
-
-// 2. 目标对象
-public class UserServiceImpl implements UserService {
-    public String findById(Long id) { return "User-" + id; }
-}
-
-// 3. 调用处理器：增强逻辑 + 反射调用 target
-public class LogHandler implements InvocationHandler {
-    private final Object target;                    // 持有目标对象
-    public LogHandler(Object target) { this.target = target; }
-
-    @Override
-    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-        System.out.println("[前置] " + method.getName());
-        Object result = method.invoke(target, args);   // 反射调真实方法
-        System.out.println("[后置] 返回 " + result);
-        return result;
-    }
-}
-
-// 4. 生成代理
-UserService proxy = (UserService) Proxy.newProxyInstance(
-        target.getClass().getClassLoader(),
-        target.getClass().getInterfaces(),   // ← 传"接口列表"
-        new LogHandler(target));
-proxy.findById(1L);
-```
-
-**② CGLIB** —— 不需要接口，靠 `Enhancer` + `MethodInterceptor`，生成子类：
-
-```java
-// 1. 目标类（普通类，无需接口）
-public class OrderService {
-    public String findById(Long id) { return "Order-" + id; }
-}
-
-// 2. 方法拦截器：增强逻辑 + invokeSuper 调父类
-public class LogInterceptor implements MethodInterceptor {
-    @Override
-    public Object intercept(Object obj, Method method, Object[] args, MethodProxy proxy) throws Throwable {
-        System.out.println("[前置] " + method.getName());
-        Object result = proxy.invokeSuper(obj, args);   // 调父类（= 目标类）方法
-        System.out.println("[后置] 返回 " + result);
-        return result;
-    }
-}
-
-// 3. 生成代理
-Enhancer enhancer = new Enhancer();
-enhancer.setSuperclass(OrderService.class);   // ← 传"父类（目标类）"
-enhancer.setCallback(new LogInterceptor());
-OrderService proxy = (OrderService) enhancer.create();
-proxy.findById(1L);
-```
-
-> **从代码一眼看出区别：**
-> - **JDK**：`Proxy.newProxyInstance` + `InvocationHandler` + `method.invoke(target)` → 要有接口，handler 里**持有 target**，靠反射调真实方法。
-> - **CGLIB**：`Enhancer` + `MethodInterceptor` + `proxy.invokeSuper(obj)` → 不要接口，代理对象**自己就是子类**、没有独立 target，调 `super` 就是目标逻辑。
-
-#### 一个 Bean 被多个切面（AOP）增强，代理怎么处理？怎么拿代理？
-
-> **核心结论：不管一个 Bean 被多少个切面增强，Spring 只会为它生成一个代理对象。** 多个 advice（`@Before`/`@Around`/事务等）被组装成一条**拦截器链（Interceptor Chain）**挂在同一个代理上，调用时按顺序依次执行。这跟手写代理"一个 InvocationHandler 对应一个代理"完全不同。
-
-**① 为什么是一个代理而不是多个？**
-
-Spring 在 `postProcessAfterInitialization` 创建代理时，会把**所有匹配该 Bean 的 advice 一次性收集起来**，封装进**一个**代理（`JdkDynamicAopProxy` 或 `CglibAopProxy`）。代理内部持有一个 `List<MethodInterceptor>`，方法调用按链式执行：
-
-```
-proxy.method()
-   └─ 拦截器链（按 @Order 顺序，从外到内）：
-        切面A @Around(前) → 切面B @Before → 事务拦截器 → 【目标方法】
-                                                            │
-                                  返回时反向：事务 → @AfterReturning → 切面A @Around(后)
-```
-
-**② 多个切面的执行顺序怎么控制？—— 用 `@Order`**
-
-给切面类加 `@Order`（**值越小优先级越高，越在外层**），或实现 `Ordered` 接口：
-
-```java
-@Aspect
-@Component
-@Order(1)   // 先执行，最外层
-public class LogAspect { ... }
-
-@Aspect
-@Component
-@Order(2)   // 后执行，嵌套在 LogAspect 里面
-public class TransactionAspect { ... }
-```
-
-> 不加 `@Order` 时顺序不确定（取决于 Bean 注册顺序），所以**多切面务必显式指定 `@Order`**。
-
-**③ 怎么拿到这个（被多切面增强的）代理对象？**
-
-正常情况下，注入拿到的 `userService` **已经是代理对象了**（Spring 自动用代理替换了原 Bean），直接用就行——所有切面都挂在它身上：
-
-```java
-@Service
-public class OrderService {
-    @Autowired
-    private UserService userService;   // 这个就是唯一代理，所有切面都在上面
-
-    public void doSomething() {
-        userService.findById(1L);      // 走完整拦截器链：日志 → 事务 → 真实方法
-    }
-}
-```
-
-如果是**同类自调用**要绕过 `this` 拿代理（详见第 33/37 题），拿到的也是那同一个代理（本来就只有一个）：
-
-```java
-// 方式1：注入自身
-@Autowired
-private UserService self;   // self 就是那个唯一代理
-
-// 方式2：AopContext（需 @EnableAspectJAutoProxy(exposeProxy = true)）
-UserService proxy = (UserService) AopContext.currentProxy();
-```
-
-**④ 手写 CGLIB 时，怎么给一个代理挂多个拦截器？（了解原理）**
-
-手写时一个代理也能挂多个 `Callback`，用 `setCallbacks` + `setCallbackFilter` 决定每个方法走哪个：
-
-```java
-Enhancer enhancer = new Enhancer();
-enhancer.setSuperclass(OrderService.class);
-enhancer.setCallbacks(new Callback[]{ logInterceptor, transactionInterceptor, NoOp.INSTANCE });
-enhancer.setCallbackFilter(method -> {           // 返回下标，决定该方法用哪个拦截器
-    if (method.getName().startsWith("save"))  return 1;  // save 走事务拦截器
-    if (method.getName().startsWith("find"))  return 0;  // find 走日志拦截器
-    return 2;                                             // 其他不增强
-});
-OrderService proxy = (OrderService) enhancer.create();
-```
 
 ### 31. `@Before`、`@After`、`@AfterReturning`、`@AfterThrowing`、`@Around` 的执行顺序是怎样的？
 
@@ -252,115 +98,14 @@ OrderService proxy = (OrderService) enhancer.create();
 
 **我做过的两个场景：枚举翻译、用户数据脱敏。**
 
-#### 场景一：枚举翻译
 
-**业务背景**：接口返回的用户状态是 `0`/`1`/`2`，前端需要展示"正常"/"禁用"/"注销"。如果每个接口手动翻译，重复代码太多。
 
-**为什么用 AOP**：所有查询接口返回后都要做一次翻译，属于**横切关注点**，适合用切面统一处理。
 
-**实现步骤**：
-
-1. **明确业务是否需要做切面** — 多个接口都有同样的翻译需求，且翻译逻辑无业务耦合
-2. **明确切入时机** — 用 `@AfterReturning`，目标方法成功返回后对响应体做翻译
-3. **写切点表达式** — 匹配所有返回带 `@EnumTranslate` 注解字段的 DTO 的 Controller 方法
-4. **完成切面** — 反射扫描返回对象中带注解的字段，查枚举映射表替换值
-
-```java
-@Aspect
-@Component
-public class EnumTranslateAspect {
-
-    @AfterReturning(pointcut = "execution(* com.example.controller..*.*(..))", returning = "result")
-    public void translate(Result<?> result) {
-        Object data = result.getData();
-        if (data != null) {
-            translateEnums(data);  // 反射扫描 @EnumTranslate 字段并翻译
-        }
-    }
-}
-```
-
-#### 场景二：用户数据脱敏
-
-**业务背景**：用户列表、详情等接口返回的手机号、身份证号需要部分隐藏（如 `138****1234`）。
-
-**为什么用 AOP**：涉及用户敏感数据的接口很多，逐个手写脱敏逻辑容易遗漏，用切面统一拦截保证不漏。
-
-**实现步骤**：
-
-1. **明确业务是否需要做切面** — 涉及隐私合规，必须全量覆盖不能遗漏，适合切面兜底
-2. **明确切入时机** — 同样用 `@AfterReturning`，在数据返回给前端之前脱敏
-3. **写切点表达式** — 匹配返回用户信息的接口
-4. **完成切面** — 反射扫描带 `@SensitiveField(type=PHONE)` 注解的字段，按类型脱敏
-
-```java
-@Aspect
-@Component
-public class DataMaskingAspect {
-
-    @AfterReturning(pointcut = "execution(* com.example.controller..*.*(..))", returning = "result")
-    public void mask(Result<?> result) {
-        Object data = result.getData();
-        if (data != null) {
-            maskSensitiveFields(data);  // 反射扫描 @SensitiveField 字段并脱敏
-        }
-    }
-}
-```
-
-#### 总结：做切面的 4 步方法论
-
-| 步骤 | 要回答的问题 | 关键决策 |
-|------|-------------|---------|
-| ① 明确业务 | 这个需求是横切关注点吗？多个地方重复出现？ | 不是横切关注点就别硬用 AOP |
-| ② 确定时机 | 方法前（`@Before`）？方法后（`@AfterReturning`）？环绕（`@Around`）？ | 枚举翻译/脱敏都是改返回值，用 `@AfterReturning` |
-| ③ 写切点 | 切哪些包、哪些类、哪些方法？ | 范围太大会影响性能，太窄会遗漏 |
-| ④ 完成切面 | 注解驱动 or 表达式匹配？反射还是序列化拦截？ | 注解驱动（`@EnumTranslate`）更灵活，表达式匹配更省事 |
-
-> 面试加分点：主动说明**为什么不用其他方案**——枚举翻译也可以在 Service 层做，但每个方法都要调一次；脱敏也可以用 Jackson 序列化器，但切面方案更统一、不依赖具体框架。
 ### 33. AOP 的自调用问题是什么？为什么同一个类里调用 `@Transactional` 方法不走代理？怎么解决？
 
 **原因**：代理对象和目标对象是两个不同的对象。代理确实重写了所有方法，但方法内部的 `this` 指向的是**目标对象**，不是代理对象，所以 `this.methodB()` 绕过了代理。
 
-```java
-// 代理对象（Spring 生成的子类）
-class UserService$$Proxy {
-    private UserService target;  // 持有真正的目标对象
 
-    @Override
-    public void methodA() {
-        // 开启事务（切面逻辑）
-        target.methodA();  // 调用目标对象的方法
-        // 提交事务
-    }
-
-    @Override
-    public void methodB() {
-        // 开启事务（切面逻辑）
-        target.methodB();
-        // 提交事务
-    }
-}
-```
-
-```java
-// 目标对象（你写的原始类）
-@Service
-public class UserService {
-
-    @Transactional
-    public void methodA() {
-        // this 是 UserService 本身，不是 Proxy
-        // 所以绕过了代理，事务不生效
-        this.methodB();
-    }
-
-    @Transactional
-    public void methodB() {
-        // ...
-    }
-}
-```
 
 **调用链对比：**
 
@@ -375,14 +120,7 @@ public class UserService {
   Controller → Proxy.methodB()（事务生效）✅
 ```
 
-**解决方式**（选一种）：
 
-1. **注入自身**：`@Autowired` 把自己注入进来，通过代理调用
-2. **`AopContext.currentProxy()`**：获取当前代理对象调用（需开启 `@EnableAspectJAutoProxy(exposeProxy = true)`）
-3. **拆到另一个类**：把方法移到别的 Service，天然走代理（推荐）
-
-> 一句话：代理包的是 target 的外壳，但 target 内部的 `this` 永远指向自己，不会指向代理。
-### 34. Spring AOP 和 AspectJ 有什么区别？各自适用什么场景？
 ### 35. Spring 的事务传播机制有哪几种？`REQUIRED`、`REQUIRES_NEW`、`NESTED` 有什么区别？你在项目中怎么选的？
 
 **7 种传播行为一览：**
@@ -397,41 +135,9 @@ public class UserService {
 | **NEVER** | 抛异常 | 非事务执行 | 强制要求不在事务中调用 |
 | **NESTED** | 在当前事务中创建保存点（Savepoint） | 新建一个 | 嵌套事务，内层可独立回滚 |
 
-**核心三者的区别（重点）：**
 
-```
-REQUIRED：methodA 和 methodB 共用同一个事务
-  methodA（事务T1）
-    → methodB（加入 T1）
-  B 异常 → A 和 B 一起回滚
 
-REQUIRES_NEW：methodB 挂起 A 的事务，自己开一个全新的
-  methodA（事务T1，挂起）
-    → methodB（事务T2，全新）
-  B 异常 → 只回滚 T2，T1 不受影响（除非 A 也抛异常）
 
-NESTED：methodB 在 A 的事务中设置一个保存点
-  methodA（事务T1）
-    → Savepoint
-    → methodB（嵌套在 T1 内）
-  B 异常 → 回滚到 Savepoint，A 继续执行
-  A 异常 → A 和 B 一起回滚
-```
-
-| 对比 | REQUIRED | REQUIRES_NEW | NESTED |
-|------|---------|-------------|--------|
-| 事务数量 | 1 个 | 2 个（内层全新） | 1 个（Savepoint 嵌套） |
-| 内层回滚影响外层 | ✅ 一起回滚 | ❌ 不影响 | ❌ 回滚到保存点，外层继续 |
-| 外层回滚影响内层 | ✅ 一起回滚 | ❌ 不影响 | ✅ 一起回滚 |
-| 性能 | 最好 | 较差（要挂起+新建连接） | 折中（Savepoint 很轻） |
-
-**项目中怎么选：**
-
-- **日志/审计记录** → 用 `REQUIRES_NEW`，主业务回滚了日志也不能丢
-- **批量处理中某条失败不影响整体** → 用 `NESTED`，失败回滚到保存点，继续处理下一条
-- **其余全部用 `REQUIRED`**（默认值），没必要别换
-
-> 面试一句话：绝大多数场景用 REQUIRED 就够；需要独立提交/回滚用 REQUIRES_NEW；想省钱又想内层可独立回滚用 NESTED。
 ### 36. `@Transactional` 注解在什么情况下会失效？列举至少 5 种场景。
 
 | # | 场景 | 原因 | 解决 |
@@ -500,74 +206,166 @@ public class UserService {
 > 优点：没有 hack，符合设计原则。缺点：有时业务上两个方法就是属于同一个类，强行拆不合理。
 
 **面试怎么答**：先说三种方式，然后说"生产中简单场景用 `AopContext`，复杂场景优先拆类"。
-### 38. 事务的隔离级别有哪些？分别能解决什么并发读问题？
 
-**三种并发读问题：**
-
-| 问题 | 含义 | 场景 |
-|------|------|------|
-| **脏读** | 读到了其他事务未提交的数据 | A 修改了余额但未提交，B 读到了修改后的值，A 回滚，B 读到的就是脏数据 |
-| **不可重复读** | 同一事务内两次读同一行，结果不同 | A 两次查余额，中间 B 修改并提交了，两次结果不一样 |
-| **幻读** | 同一事务内两次查询，行数不同 | A 查 age>20 的用户有 5 条，中间 B 插入了一条，再查变成 6 条 |
-
-**四个隔离级别：**
-
-| 隔离级别 | 脏读 | 不可重复读 | 幻读 | 性能 |
-|---------|------|-----------|------|------|
-| **READ UNCOMMITTED**（读未提交） | ❌ 可能 | ❌ 可能 | ❌ 可能 | 最快 |
-| **READ COMMITTED**（读已提交） | ✅ 避免 | ❌ 可能 | ❌ 可能 | 快 |
-| **REPEATABLE READ**（可重复读） | ✅ 避免 | ✅ 避免 | ❌ 可能 | 较慢 |
-| **SERIALIZABLE**（串行化） | ✅ 避免 | ✅ 避免 | ✅ 避免 | 最慢 |
-
-> MySQL InnoDB 默认 **REPEATABLE READ**，但通过 MVCC + Next-Key Lock 实际上也能避免大部分幻读。
-
-**Spring 怎么设置**：`@Transactional(isolation = Isolation.REPEATABLE_READ)`
-
-> 面试一句话：四个级别逐级增强，代价是并发性能下降。MySQL 默认 REPEATABLE READ，一般不需要改。Oracle 默认 READ COMMITTED。
-### 39. 分布式事务你是怎么处理的？Seata 的 AT 模式和 TCC 模式有什么区别？
-### 40. 为什么说"不要在事务里做 RPC 调用和 IO 操作"？你遇到过这个问题吗？
 ### 41. 声明式事务和编程式事务各有什么优缺点？你一般在什么场景用编程式事务？
+
+**一句话：声明式用注解（`@Transactional`），编程式手动写代码控制。**
+
+| | 声明式事务 | 编程式事务 |
+|---|---|---|
+| **用法** | `@Transactional` 注解 | `TransactionTemplate` 或 `PlatformTransactionManager` |
+| **原理** | AOP 代理 + `TransactionInterceptor` | 手动调 `getTransaction/commit/rollback` |
+| **优点** | 简洁，业务代码无侵入 | 控制精细，范围可随心所欲 |
+| **缺点** | 粒度只能到方法级；自调用/多线程易失效 | 代码侵入，啰嗦 |
+| **常用度** | 90% 场景用这个 | 少数精细控制场景 |
+
+```java
+// 声明式 —— 一个注解搞定
+@Transactional
+public void createUser(User u) {
+    userMapper.insert(u);
+}
+
+// 编程式 —— TransactionTemplate
+public void createUser(User u) {
+    transactionTemplate.execute(status -> {        // 手动开启事务
+        userMapper.insert(u);
+        logMapper.insert(log);
+        return null;
+    });                                            // 自动 commit / rollback
+}
+```
+
+**什么场景用编程式：**
+
+1. **事务范围要小于方法**：方法里只有中间几步需要事务，前后还有发 MQ、调远程，用声明式会让整个方法都在事务里（长事务）
+2. **批量循环逐条提交**：导入大量数据，每 N 条提交一次，某条失败不影响其他
+3. **多线程 / 异步**：声明式靠 ThreadLocal 绑定 Connection，子线程拿不到
+4. **动态决定回滚**：复杂条件下用 `status.setRollbackOnly()` 更灵活
+
+> **日常 99% 用声明式；只有「事务范围精细控制」或「脱离 AOP 上下文（多线程）」时才上编程式。**
 
 ## 六、Spring MVC 核心技术（6 题）
 
 ### 42. Spring MVC 一次请求的完整处理流程是怎样的？从 DispatcherServlet 开始一步步说清楚。
+
+**核心一句话：请求都进 `DispatcherServlet`，它负责找 Controller、调 Controller、处理结果。**
+
+```text
+浏览器请求
+   │
+   ▼
+① DispatcherServlet（前端控制器，统一入口）
+   │
+   ├─② HandlerMapping：根据 URL 找到 Handler（Controller 方法）+ 拦截器链
+   │      返回 HandlerExecutionChain
+   │
+   ├─③ HandlerAdapter：真正调用 Controller 方法
+   │      ├─ 拦截器 preHandle()
+   │      ├─ 参数解析 + 数据绑定，执行 Controller
+   │      ├─ 拦截器 postHandle()
+   │      └─ 返回 ModelAndView（@ResponseBody 则直接写 JSON）
+   │
+   ├─④ ViewResolver：解析视图（返回 JSON 的接口跳过这步）
+   │
+   └─⑤ 渲染视图 → 响应浏览器
+        最后执行拦截器 afterCompletion()
+```
+
+**三个最关键的组件：**
+
+| 组件 | 作用 |
+|---|---|
+| **HandlerMapping** | URL → Controller 方法的映射（`@RequestMapping`） |
+| **HandlerAdapter** | 真正执行 Controller 方法，处理参数绑定 |
+| **ViewResolver** | 视图名 → 视图对象 |
+
+> **REST 接口特殊点：** `@RestController`/`@ResponseBody` 不走 `ViewResolver`，返回值由 `HttpMessageConverter`（如 `MappingJackson2HttpMessageConverter`）直接序列化成 JSON 写回响应。
+
 ### 43. 拦截器（Interceptor）和过滤器（Filter）的区别是什么？执行顺序是怎样的？
+
+
+
+**执行顺序（结合 DispatcherServlet）：**
+
+```text
+请求
+  │
+  ▼
+Filter1.doFilter(前)  ──────────────────────┐  Filter 在最外层（洋葱模型）
+  Filter2.doFilter(前)  ───────────────────┐ │
+    │                                      │ │
+    ▼  DispatcherServlet.doDispatch()      │ │
+    │                                      │ │
+    ├─ Interceptor1.preHandle   (顺序)     │ │  Interceptor 在内部
+    ├─ Interceptor2.preHandle   (顺序)     │ │  包裹 Controller
+    │     ▼  Controller 执行                │ │
+    ├─ Interceptor2.postHandle  (逆序)     │ │
+    ├─ Interceptor1.postHandle  (逆序)     │ │
+    │     ▼  视图渲染                       │ │
+    ├─ Interceptor2.afterCompletion(逆序)  │ │
+    └─ Interceptor1.afterCompletion(逆序)  │ │
+    │                                      │ │
+    ▼  DispatcherServlet 结束              │ │
+  Filter2.doFilter(后)  ──────────────────┘ │
+Filter1.doFilter(后)  ──────────────────────┘
+  │
+  ▼
+响应
+```
+
+> **重要认知：** Filter **不是 Tomcat 提供的**，而是 **Servlet 规范**定义的接口，Tomcat 只是规范的实现者之一（换 Jetty / Undertow 照样能用）；Interceptor 才是 Spring 自己的。所以 **Filter 属于 Servlet 规范（被容器驱动），Interceptor 属于 Spring（被 DispatcherServlet 驱动）**。
+
+> **记忆口诀：** Filter 是"保安"（门口，啥都拦，不懂业务）；Interceptor 是"秘书"（进了门，知道你找谁、能不能见）。
+
 ### 44. 如何在 Spring Boot 中做统一的参数校验？`@Valid`、`@Validated`、自定义校验注解怎么用？
 ### 45. 全局异常处理怎么实现？`@ControllerAdvice` + `@ExceptionHandler` 的原理是什么？
-### 46. 统一返回格式怎么封装？你在项目中是怎么做的？
+
 ### 47. 如何在 Spring Boot 中做接口的幂等性校验？有几种方案？
 
-## 七、数据库与持久层（7 题）
+**一句话：幂等 = 同一个请求执行一次和多次，结果完全一样。**
 
-### 48. Spring Boot 怎么整合 MyBatis / MyBatis-Plus？你做过哪些配置？
-### 49. MyBatis-Plus 的分页插件原理是什么？你在项目中怎么用的？
-### 50. MyBatis 的 `#{}` 和 `${}` 有什么区别？为什么要尽量用 `#{}`？
-### 51. SQL 执行慢你怎么排查和优化？说说你的思路和工具。
-### 52. 什么时候该建索引？联合索引的"最左前缀"原则是什么？你在项目中有没有因为索引使用不对导致过慢查询？
-### 53. 分库分表后，怎么处理跨库的分页、排序、聚合查询？ShardingSphere 是怎么解决这些问题的？
-### 54. 读写分离你是怎么做的？主从延迟导致读到旧数据怎么处理？
+#### 我的方案：Redis 锁 + 业务状态校验
 
-## 八、缓存实战（9 题）
+> 以支付接口为例：先用 Redis 锁挡住**并发**，再校验业务**状态**，双重保险。
 
-### 55. 缓存穿透、缓存击穿、缓存雪崩分别是什么意思？你在项目中怎么解决的？
-### 56. 如何保证数据库和缓存的双写一致性？Cache-Aside 模式的具体步骤是什么？延迟双删怎么做？
-### 57. Redis 在你的项目中具体用了哪些场景？每个场景用的什么数据结构？为什么选这个结构？
-### 58. 热点 Key 突然过期导致大量请求打到数据库，怎么处理？
-### 59. 大 Key（Big Key）有什么危害？怎么发现和拆解？
-### 60. Redis 分布式锁是怎么实现的？`SETNX` + Lua 脚本和 Redisson 的 RedLock 有什么区别？
-### 61. 用 Redis 实现一个延时队列怎么做？有哪些方案？
-### 62. 本地缓存（Caffeine）和分布式缓存（Redis）怎么搭配使用？多级缓存的更新策略是什么？
-### 63. Redis 的内存淘汰策略有哪些？你在项目中用的是哪个？为什么？
+```java
+@Transactional
+public void payOrder(String orderId) {
+    String lockKey = "pay:lock:" + orderId;
+    // ① Redis 锁：防并发（同一订单同时只能一个请求进来）
+    Boolean locked = redisTemplate.opsForValue()
+            .setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
+    if (!locked) {
+        throw new BizException("正在处理，请勿重复提交");
+    }
+    try {
+        // ② 业务状态校验：防重复（已支付的订单不能再付）
+        Order order = orderMapper.selectById(orderId);
+        if (order.getStatus() == OrderStatus.PAID) {
+            throw new BizException("订单已支付");
+        }
+        // ③ 执行支付、更新状态
+        doPay(order);
+        order.setStatus(OrderStatus.PAID);
+        orderMapper.updateById(order);
+    } finally {
+        redisTemplate.delete(lockKey);   // 释放锁
+    }
+}
+```
 
-## 九、消息队列实战（7 题）
+> **两层各自的作用：**
+> - **Redis 锁**：挡**并发**（同一时刻两个请求同时进来，只放行一个）
+> - **业务状态校验**：挡**重复**（不管什么时候，已支付的订单不能再付）
+>
+> 生产建议用 **Redisson** 的分布式锁（自带看门狗续期、可重入），比 `setIfAbsent` 更稳。
 
-### 64. 消息队列在你的项目中解决了什么问题？为什么不用同步调用而要用 MQ？
-### 65. 如何保证消息不丢失？从生产者、Broker、消费者三端分别说说。
-### 66. 消息重复消费怎么处理？你的系统是怎么做幂等的？
-### 67. 消息堆积了怎么办？积压几百万条消息你怎么快速处理？
-### 68. 顺序消息怎么保证？什么场景需要顺序消息？
-### 69. Kafka 的消费者组（Consumer Group）和分区（Partition）之间是什么关系？
-### 70. Kafka 的 ISR 机制是什么？`acks=all` 和 `min.insync.replicas` 怎么配合保证可靠性？
+---
+
+#### 防重复提交 vs 幂等的区别
+
+> **关键区别：** 防重复提交只在"短时间窗口"内生效，窗口一过还能再提交；幂等是"任何时候"重复都保证结果一致。所以防重复提交防不住"跨时间的重复"，真正兜底还得靠幂等（状态校验 / 唯一索引）。
 
 ## 十、分布式与微服务（10 题）
 

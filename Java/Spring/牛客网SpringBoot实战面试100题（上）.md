@@ -10,18 +10,16 @@
 
 ### 1. Spring Boot 相比传统 Spring 框架做了什么改进？为什么现在大家都在用？
 
-> **一句话总结：** Spring 是"提供能力"的基础框架（IoC/AOP），Spring Boot 是"帮你把 Spring 用起来"的脚手架—。
-
-> 第一，内嵌容器tomcat，开箱即用。
+> **一句话总结：** Spring 是"提供能力"的基础框架（IoC/AOP），Spring Boot 是"帮你把 Spring 用起来"的脚手架。
 >
-> 第二，Starter 机制，一键集成，某个功能的maven依赖统一管理好。
+> **第一，内嵌 Tomcat**，开箱即用，无需部署外部容器。
 >
-> 第三，约定优于配置，springboot对很多组件都有默认配置，当用户偏移这些配置的之后，需要用户添加自己的约定。
+> **第二，Starter 机制**，一键集成，把某个功能的 Maven 依赖统一管理好。
+>
+> **第三，约定优于配置**，Spring Boot 对很多组件都有默认配置，当用户偏离这些默认值时，再添加自己的配置即可。
 
 ### 2. `@SpringBootApplication` 注解内部由哪几个注解构成？各自负责什么？
 
-=
->
 > **① `@SpringBootConfiguration`** — 本质就是 `@Configuration`，标记当前类是 Spring 的配置类，会被注册到 IoC 容器中。
 >
 > **② `@EnableAutoConfiguration`** —`META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 文件中读取所有候选的自动配置类 ，然后按需加载默认配置 。
@@ -30,20 +28,24 @@
 >
 > > **追问预警：** "那我想扫描别的包怎么办？" → 用 `@SpringBootApplication(scanBasePackages = "com.xxx")` 或在启动类上额外加 `@ComponentScan("com.xxx")` 指定扫描路径。
 
-
-
 ### 4. Spring Boot 的启动流程是怎样的？`SpringApplication.run()` 内部做了哪些关键步骤？
 
 > 一句话概括：**推断应用类型 → 加载扩展 → 准备环境 → 创建容器 → `refresh()`（自动配置生效 + Bean 实例化）→ 回调 Runner。**
 
-推断应用类型：web类型、响应式类型、普通的类型
-加载扩展： spring有很多固定的拓展点 ，这些
+| 步骤 | 干了啥 | 一句话理解 |
+|---|---|---|
+| **① 推断应用类型** | 看 classpath 有没有 Tomcat / Reactive 相关类，判断是 Servlet Web、Reactive Web 还是普通应用 | 决定后面建哪种容器 |
+| **② 加载扩展** | 通过 `spring.factories` 反射加载三类钩子：`ApplicationContextInitializer`、`ApplicationListener`、`SpringApplicationRunListener` | 开工前把"插手点"备好（个人开发基本用不到，**测试**和 **Nacos/Apollo** 等第三方框架才用） |
+| **③ 准备环境** | 建一个 `Environment` 配置池，把命令行参数、JVM 参数(`-D`)、系统环境变量、`application.yml` 全收集进去 | 把"配置池"灌满，后续 Bean 取配置才有得取 |
+| **④ 创建容器** | 按应用类型 `new` 出对应的 `ApplicationContext` | 造一个空容器 |
+| **⑤ `refresh()`（最核心）** | 加载 BeanDefinition → 自动配置生效（读 `AutoConfiguration.imports`）→ 实例化 Bean → 依赖注入 → 生命周期回调，并启动内嵌 Tomcat | Spring 的灵魂，真正"造 Bean"的地方 |
+| **⑥ 回调 Runner** | 容器就绪后执行 `ApplicationRunner` / `CommandLineRunner` | 给开发者"启动完了干点活"的入口（如预热缓存） |
 
-
+> **记忆重点：** ①②③④ 都是**搭台**，**⑤ `refresh()` 才是唱戏** —— Bean 创建、注入、自动配置全在这一步。外面包的那圈是 Spring Boot 加的壳，`refresh()` 是 Spring 本身的灵魂。
 
 ### 6. `CommandLineRunner` 和 `ApplicationRunner` 的区别是什么？你在项目中用过吗？
 
-> **相同点：** 执行时机一样，都在容器启动完成后（所有 Bean 创建好、`refresh()` 结束）执行。常用于预热缓存、初始化数据、启动后检查依赖服务等。
+> **相同点：** 执行时机一样。
 >
 > **区别：参数类型不同。** 假设命令行为 `java -jar app.jar --name=张三 hello 123`：
 >
@@ -53,10 +55,6 @@
 > | **实际拿到什么** | `["--name=张三", "hello", "123"]` | 选项参数和非选项参数已分好 |
 > | **取 `--name` 的值** | 自己截字符串：`args[0].split("=")[1]` | 直接调：`args.getOptionValues("name")` → `["张三"]` |
 > | **取非 `--` 参数** | 自己判断哪些没 `--` 前缀 | 直接调：`args.getNonOptionArgs()` → `["hello", "123"]` |
->
-> 简单说：`CommandLineRunner` 给你一坨原始字符串自己解析；`ApplicationRunner` 帮你把 `--key=value` 和普通参数分好了，拿来就能用。
->
-> **怎么选：** 需要用命令行参数选 `ApplicationRunner`，不需要参数选 `CommandLineRunner`。
 >
 > ```java
 > // CommandLineRunner —— 不关心参数，启动后跑一段逻辑
@@ -80,12 +78,7 @@
 >     }
 > }
 >
-> // 多个 Runner 用 @Order 控制顺序，数字越小越先执行
-> @Component @Order(1)
-> public class RunnerA implements CommandLineRunner { ... }
->
-> @Component @Order(2)
-> public class RunnerB implements ApplicationRunner { ... }
+
 > ```
 
 ### 7. Spring Boot 有几种注入 Bean 的方式？各有什么优缺点？
@@ -133,6 +126,7 @@
 > | **Spring 推荐** | ✅ 官方推荐 | 可选依赖时用 | 不推荐 |
 >
 > **结论：构造器注入是首选**——不可变（`final`）、不空、好单元测试、循环依赖早发现。字段注入最简单但问题最多：不能 `final`、不好测试、隐藏依赖关系。
+
 ### 8. Spring Boot 中 `@ConfigurationProperties` 和 `@Value` 的区别是什么？什么时候用哪个？
 
 > ```java
@@ -171,44 +165,19 @@
 > | **适合场景** | 取 1-2 个零散值 | 一组相关配置统一管理 |
 >
 > **怎么选：零散取值用 `@Value`，批量绑定用 `@ConfigurationProperties`。** Spring Boot 官方 Starter 用的全是 `@ConfigurationProperties`（如 `RedisProperties`、`DataSourceProperties`），因为支持松散绑定和校验，更规范。
+
 ### 9. Spring Boot 支持哪些配置文件格式？`.properties` 和 `.yml` 加载优先级是怎样的？
 
 > Spring Boot 支持 `.properties` 和 `.yml`（`.yaml` 和 `.yml` 等同）两种格式。
 >
 > **优先级：`.properties` > `.yml`。** 两个文件同时存在且 key 相同时，`.properties` 的值生效。
 >
-> | | `.properties` | `.yml` |
-> |---|---|---|
-> | **格式** | `key=value`，扁平 | 缩进层级，树状结构 |
-> | **可读性** | 配置多了很乱 | 层级清晰，适合复杂配置 |
-> | **优先级** | **高** | 低 |
-> | **支持 List/Map** | 要用下标 `list[0]=a` | 天然支持 |
->
-> ```properties
-> # .properties 扁平写法
-> spring.profiles.active=dev
-> spring.datasource.url=jdbc:mysql://localhost:3306/db
-> spring.datasource.username=root
-> spring.datasource.password=123456
-> ```
->
-> ```yaml
-> # .yml 层级写法，可读性更好
-> spring:
->   profiles:
->     active: dev
->   datasource:
->     url: jdbc:mysql://localhost:3306/db
->     username: root
->     password: 123456
-> ```
->
-> **实际项目中基本全用 `.yml`**，可读性好。优先级这个知道就行，不要两个文件混用，选一个坚持用。
+
 ### 10. Spring Boot 多环境配置怎么实现？你在项目中怎么切换 dev / test / prod 环境？
 
 > **传统方式（纯 Spring Boot）：** 用 `application-{profile}.yml` 按环境拆配置文件。
 >
-> ```
+> ```text
 > application.yml           ← 公共配置
 > application-dev.yml       ← 开发环境
 > application-test.yml      ← 测试环境
@@ -228,80 +197,6 @@
 >
 > **项目实际方式（Nacos）：** 配置放 Nacos 服务端，本地只配 Nacos 地址和 profile，不同环境用 namespace 隔离。
 >
-> ```yaml
-> # 本地 bootstrap.yml
-> spring:
->   application:
->     name: order-service
->   profiles:
->     active: dev   # 切环境改这一行
->   cloud:
->     nacos:
->       server-addr: 192.168.1.100:8848
->       config:
->         namespace: dev
->         file-extension: yml
-> ```
->
-> | | 纯 Spring Boot | Nacos |
-> |---|---|---|
-> | **配置存放** | 打在 jar 包里 | Nacos 服务端，不进 jar |
-> | **改配置** | 改代码重新打包部署 | Nacos 控制台改，不用重启 |
-> | **切环境** | 改 `spring.profiles.active` | 改 namespace 或 profile |
-> | **动态刷新** | ❌ 不支持 | ✅ `@RefreshScope` 实时生效 |
-> | **配置回滚** | 靠 Git 历史版本 | Nacos 自带历史版本管理 |
->
-> **面试答法：** 先说传统方式（`application-{profile}.yml` + `spring.profiles.active`），再说项目实际用的 Nacos 方案——配置放 Nacos，用 namespace 隔离环境，支持动态刷新不用重启。
-### 11. Spring Boot 2.x 和 3.x 有哪些重要变化？升级时需要注意什么？
-
-> **最低要求提升：**
->
-> | | Spring Boot 2.x | Spring Boot 3.x |
-> |---|---|---|
-> | **JDK** | 8+ | **17+** |
-> | **Spring Framework** | 5.x | **6.x** |
-> | **Java EE 包名** | `javax.*` | **`jakarta.*`** |
->
-> **① javax → jakarta（升级最痛的点）。** Java EE 捐给 Eclipse 基金会后改名为 Jakarta EE，包名跟着改。涉及 Servlet、Validation、JPA、Mail 等所有 Java EE 相关包。
->
-> ```java
-> // 2.x
-> import javax.servlet.http.HttpServletRequest;
-> import javax.validation.Valid;
->
-> // 3.x —— 全部改为 jakarta
-> import jakarta.servlet.http.HttpServletRequest;
-> import jakarta.validation.Valid;
-> ```
->
-> **② 自动配置机制变了。**
->
-> ```properties
-> # 2.x：META-INF/spring.factories（key-value 格式）
-> org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
->   com.example.MyAutoConfiguration
->
-> # 3.x：META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports
-> # 每行一个全类名，去掉了 key-value 格式
-> com.example.MyAutoConfiguration
-> ```
->
-> **③ 其他重要变化：**
->
-> | 变化点 | 2.x | 3.x |
-> |---|---|---|
-> | **GraalVM 原生镜像** | 不支持 | ✅ 官方支持，启动快 10 倍+ |
-> | **Observability** | Spring Cloud Sleuth + Zipkin | Micrometer + Tracing，统一指标和链路追踪 |
-> | **Spring Security** | `WebSecurityConfigurerAdapter` | 废弃，改用 `SecurityFilterChain` Bean |
-> | **路径匹配** | AntPathMatcher | 默认改用 **PathPatternParser**，性能更好 |
-> | **Redis 配置前缀** | `spring.redis.*` | 改为 `spring.data.redis.*` |
->
-> **④ 升级注意事项：**
-> 1. **先升 JDK 17**——硬门槛
-> 2. **javax → jakarta 全局替换**——IDE 批量替换 `import javax.` → `import jakarta.`，逐个验证
-> 3. **依赖版本对齐**——第三方库必须用支持 Spring Boot 3 的版本（MyBatis-Plus、Druid、Nacos 等）
-> 4. **spring.factories 迁移**——自研 Starter 要改配置文件位置和格式
-> 5. **Spring Security 配置改写**——`WebSecurityConfigurerAdapter` 废弃了
 
 ## 二、自动配置与 Starter 机制（8 题）
 
@@ -360,7 +255,7 @@
 >
 > **完整链路：**
 >
-> ```
+> ```text
 > @SpringBootApplication
 >   └→ @EnableAutoConfiguration
 >        └→ @Import(AutoConfigurationImportSelector)
@@ -373,15 +268,7 @@
 > ```
 >
 > **面试答法（四步说清楚）：** `@EnableAutoConfiguration` 触发 → `AutoConfigurationImportSelector` 读配置文件拿到候选类 → 条件注解过滤 → 剩下的注册为 Bean。
-### 15. `spring.factories` 文件在 Spring Boot 2.x 和 3.x 中有什么变化？
 
-> | | 2.x | 3.x |
-> |---|---|---|
-> | **文件路径** | `META-INF/spring.factories` | `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` |
-> | **格式** | key-value（`EnableAutoConfiguration=类1,类2`） | 每行一个全类名 |
-> | **一个文件管所有** | ✅ 同一个文件存多种扩展点 | ❌ 每种扩展点独立文件 |
->
-> 变化的原因：`spring.factories` 一个文件塞了太多东西（自动配置、Initializer、Listener 全混在一起），3.x 拆开更清晰，加载也更快。如果自研了 Starter，升级 3.x 时要迁移这个文件。
 ### 16. `@ConditionalOnClass`、`@ConditionalOnMissingBean`、`@ConditionalOnProperty` 这些条件注解在自动装配中怎么协作的？
 
 > 三个注解各管一层过滤：
@@ -427,7 +314,6 @@
 >        最终真正生效的配置类
 > ```
 >
-> **核心思想：** `@ConditionalOnClass` 管"你有没有这个能力"，`@ConditionalOnMissingBean` 管"用户有没有自己搞"，`@ConditionalOnProperty` 管"配置开关"。三层过滤保证只加载真正需要的。
 ### 17. 如何排除某个不想用的自动配置？比如不想用默认的 DataSource？
 
 > 三种方式：
@@ -453,18 +339,14 @@
 >       - org.springframework.boot.autoconfigure.jdbc.DataSourceTransactionManagerAutoConfiguration
 > ```
 >
-> | 方式 | 优点 | 缺点 |
-> |---|---|---|
-> | `@SpringBootApplication(exclude)` | 最常用，一眼能看到 | 改了要重新编译 |
-> | 配置文件 | 不用改代码，不同环境排除不同的 | 类名太长 |
-> | `@EnableAutoConfiguration(exclude)` | 注解拆开写时用 | 拆开写的情况少 |
 >
 > **实际项目中最常用第一种**。
+
 ### 18. 如果你自己封装一个公司内部的 Starter，步骤是怎样的？需要注意什么？
 
 > **① 建两个模块（官方推荐结构）：**
 >
-> ```
+> ```text
 > xxx-spring-boot-starter           ← 空壳模块，只做依赖聚合
 >   └── pom.xml（引入 autoconfigure + 第三方依赖）
 >
@@ -524,16 +406,7 @@
 >     <artifactId>xxx-spring-boot-starter</artifactId>
 > </dependency>
 > ```
->
-> **需要注意：**
->
-> | 注意点 | 说明 |
-> |---|---|
-> | 业务逻辑放 autoconfigure，不放 starter | starter 只做依赖聚合 |
-> | 必须加 `@ConditionalOnMissingBean` | 否则会覆盖用户自定义的 Bean |
-> | 配置类用 `@ConfigurationProperties` | 方便用户批量配置，不用 `@Value` |
-> | 提供默认值 | 用户不配也能用 |
-> | 不要用 `@ComponentScan` | 通过配置文件注册，避免和用户项目冲突 |
+
 ### 19. Starter 中的自动配置类和用户自己定义的 Bean，谁的优先级更高？如果用户想覆盖 Starter 的默认 Bean 怎么做？
 
 > **用户的 Bean 优先级更高。** Spring Boot 设计原则：用户定义的优先，自动配置的后备。
@@ -579,101 +452,20 @@
 > // 方式三：排除整个自动配置类
 > @SpringBootApplication(exclude = {RedisAutoConfiguration.class})
 > ```
-### 20. 你在项目中实际封装过哪些 Starter？解决了什么问题？
 
-> 项目中用过集团内部封装的 **OpenAPI 调用 Starter**。
->
-> **背景：** 集团内部服务之间通过第三方 OpenAPI 平台进行调用，每次调用都要处理签名、鉴权、加密、重试、日志记录等通用逻辑，每个服务都重复写一遍。
->
-> **集团封装的 Starter 做了什么：**
-> - 统一的签名算法、鉴权令牌获取、请求加密/解密
-> - 统一的异常处理、重试机制、调用日志记录
-> - 通过 `@ConfigurationProperties` 暴露配置（appId、appSecret、平台地址等）
-> - 提供自动注册的 `OpenApiClient` Bean
->
-> ```xml
-> <!-- 引入 Starter -->
-> <dependency>
->     <groupId>com.group</groupId>
->     <artifactId>openapi-spring-boot-starter</artifactId>
-> </dependency>
-> ```
->
-> ```yaml
-> # 配置应用信息
-> openapi:
->   app-id: order-service
->   app-secret: xxx
->   server-url: https://openapi.group.com
-> ```
->
-> ```java
-> // 直接注入使用，不用关心签名、鉴权等细节
-> @Service
-> public class OrderService {
->     @Autowired
->     private OpenApiClient openApiClient;
->
->     public UserInfo getUser(String userId) {
->         return openApiClient.invoke("user-service", "/api/user/" + userId, UserInfo.class);
->     }
-> }
-> ```
->
-> **解决的问题：** 各业务服务不用再重复写调用 OpenAPI 平台的通用逻辑，引入 Starter + 配置即可使用，减少了大量重复代码和维护成本。
-
-## 三、IoC 容器与 Bean 生命周期（8 题）
+## 三、IoC 容器与 Bean 生命周期
 
 ### 22. IoC（控制反转）你是怎么理解的？它解决了什么问题？
 
 > **IoC（Inversion of Control）**——对象的创建和依赖管理不由你自己 new，而是交给 Spring 容器来管。"控制"指的是对象创建和依赖关系的管理权，以前自己 new（正转），现在交给容器（反转）。
 >
-> ```java
-> // 没有 IoC：自己 new，对象之间硬绑死
-> public class OrderService {
->     private UserService userService = new UserService();     // 换实现要改代码
->     private PayService payService = new AliPayService();     // 换微信支付要改代码
-> }
->
-> // 有 IoC：不 new，让 Spring 注入
-> public class OrderService {
->     private final UserService userService;   // Spring 负责创建和注入
->     private final PayService payService;     // 换实现只改配置或加个 @Bean
->
->     public OrderService(UserService userService, PayService payService) {
->         this.userService = userService;
->         this.payService = payService;
->     }
-> }
-> ```
->
-> | 没有 IoC | 有 IoC |
-> |---|---|
-> | 对象之间 new 来 new 去，耦合死了 | 只声明依赖，不管谁创建的 |
-> | 换实现要改业务代码 | 加个 `@Bean` 或换个 `@Qualifier` 就行 |
-> | 循环依赖自己解决不了 | Spring 三级缓存自动处理 |
-> | 单例、多例自己管理 | `@Scope` 一行搞定 |
-> | 事务、AOP 要自己写模板代码 | 注解一加，Spring 自动处理 |
->
-> ```java
-> // 实际例子：换支付方式只改 @Qualifier，业务代码不用动
-> @Service
-> public class OrderService {
->     private final PayService payService;
->
->     public OrderService(@Qualifier("wechatPay") PayService payService) {
->         this.payService = payService;
->     }
-> }
-> ```
->
-> **面试答法：** IoC 就是把对象的创建和依赖管理从代码里剥离出来交给 Spring 容器。解决了对象之间的硬耦合问题——你只声明需要什么，Spring 负责创建和注入。换个实现改配置就行，不用改业务代码。
+> **它解决了对象之间的硬耦合问题**——你只声明需要什么，Spring 负责创建和注入。换个实现改配置就行，不用改业务代码。
 
 ### 23. Spring 容器启动时，Bean 的完整生命周期是怎样的？每一步都在做什么？
 
 > **核心四阶段：实例化 → 属性注入 → 初始化 → 销毁。**
 >
-> ```
+> ```text
 > ① 实例化（new）
 >    ↓
 > ② 属性注入（@Autowired、setter）
@@ -695,73 +487,12 @@
 > ⑩ destroy-method（自定义销毁方法）
 > ```
 >
-> **各阶段在做什么：**
->
-> | 阶段 | 做了什么 | 你能插手的地方 |
-> |---|---|---|
-> | **实例化** | 反射调用构造器，创建对象（还没设属性） | 构造器注入在这步完成 |
-> | **属性注入** | 填充 `@Autowired`、`@Value`、setter 的依赖 | — |
-> | **Aware 回调** | 让 Bean 拿到容器的一些信息（自己的名字、ApplicationContext 等） | 实现 `ApplicationContextAware` 接口 |
-> | **前置处理** | `BeanPostProcessor` 的 `before` 方法 | — |
-> | **初始化** | 调用 `@PostConstruct` → `afterPropertiesSet()` → `init-method` | `@PostConstruct` 做初始化逻辑 |
-> | **后置处理** | `BeanPostProcessor` 的 `after` 方法 | **AOP 代理在这步生成** |
-> | **销毁** | 调用 `@PreDestroy` → `destroy()` → `destroy-method` | `@PreDestroy` 释放资源 |
->
-> ```java
-> @Component
-> public class OrderService implements ApplicationContextAware, InitializingBean, DisposableBean {
->
->     @Autowired
->     private UserService userService;  // ② 属性注入
->
->     private ApplicationContext ctx;
->
->     @Override
->     public void setApplicationContext(ApplicationContext ctx) {  // ③ Aware 回调
->         this.ctx = ctx;
->     }
->
->     @PostConstruct
->     public void init() {  // ⑤ 初始化
->         System.out.println("Bean 初始化完成");
->     }
->
->     @Override
->     public void afterPropertiesSet() {  // ⑤ InitializingBean 接口方法
->         System.out.println("属性都设好了");
->     }
->
->     @PreDestroy
->     public void cleanup() {  // ⑨ 销毁前释放资源
->         System.out.println("释放资源");
->     }
->
->     @Override
->     public void destroy() {  // ⑨ DisposableBean 接口方法
->         System.out.println("Bean 销毁");
->     }
-> }
-> ```
->
-> **面试答法：** 四大阶段——实例化 → 属性注入 → 初始化 → 销毁。初始化阶段依次调用 `@PostConstruct` → `afterPropertiesSet()` → `init-method`，销毁阶段依次调用 `@PreDestroy` → `destroy()` → `destroy-method`。**AOP 代理在后置处理（`postProcessAfterInitialization`）那步生成。**
+
 ### 24. `BeanFactory` 和 `ApplicationContext` 的区别是什么？你平时用的是哪个？
 
-> **`BeanFactory`** 是 Spring 最底层的容器接口，只提供最基本的 Bean 管理。**`ApplicationContext`** 是它的子接口，在基础上加了一堆高级功能。
+> **`BeanFactory`** 是 Spring 最底层的容器接口，只提供最基本的 Bean 管理。**`ApplicationContext`** 是它的子接口，在基础上加了一堆高级功能。平时开发一般都用 `ApplicationContext`。
 >
-> | 功能 | BeanFactory | ApplicationContext |
-> |---|---|---|
-> | **Bean 的创建和获取** | ✅ | ✅ |
-> | **BeanPostProcessor 自动注册** | ❌ 要手动注册 | ✅ 自动识别并注册 |
-> | **BeanFactoryPostProcessor 自动注册** | ❌ 手动 | ✅ 自动 |
-> | **国际化（i18n）** | ❌ | ✅ |
-> | **事件发布机制** | ❌ | ✅ `publishEvent()` |
-> | **AOP 支持** | ❌ 要手动配置 | ✅ 自动识别 `@Aspect` |
-> | **自动配置（Spring Boot）** | ❌ | ✅ |
-> | **Bean 获取时机** | **懒加载**，`getBean()` 时才创建 | **预加载**，启动时创建所有单例 |
->
-> **平时用的是 `ApplicationContext`。** Spring Boot 的 `SpringApplication.run()` 创建的就是 `ApplicationContext`，几乎不会直接用到 `BeanFactory`。
->
-> **面试答法：** `ApplicationContext` 是 `BeanFactory` 的子接口，加了事件发布、AOP、国际化、自动配置等功能。`BeanFactory` 懒加载，`ApplicationContext` 预加载。平时用的全是 `ApplicationContext`，Spring Boot 启动创建的就是它。
+
 ### 25. `@Component` 和 `@Bean` 的区别是什么？什么场景用 `@Bean`？
 
 | 维度 | `@Component` | `@Bean` |
@@ -775,90 +506,20 @@
 
 ### 26. Bean 的作用域有哪些？`singleton`、`prototype`、`request`、`session` 分别在什么场景使用？
 
-| 作用域 | 生命周期 | 典型场景 |
-|--------|---------|---------|
-| **singleton** | 容器生命周期内只有一个实例（默认） | 无状态服务、工具类、配置类 |
-| **prototype** | 每次 `getBean()` 都创建新实例 | 有状态对象、每次请求需要独立实例 |
-| **request** | 每次 HTTP 请求创建一个新实例（仅 Web 环境） | 请求级别的数据封装（如 `RequestContext`） |
-| **session** | 每个 HTTP Session 创建一个新实例（仅 Web 环境） | 用户会话级别的数据（如购物车） |
-| **application** | 整个 ServletContext 生命周期一个实例 | 应用级别的全局配置 |
-| **websocket** | 每个 WebSocket 会话一个实例 | WebSocket 通信上下文 |
+| 作用域 | 生命周期 |
+|--------|---------|
+| **singleton**（默认） | 容器内只有一个实例 |
+| **prototype** | 每次 `getBean()` 都新建 |
+| **request** | 每个 HTTP 请求一个（仅 Web） |
+| **session** | 每个 HTTP Session 一个（仅 Web） |
+| **application** | 整个 ServletContext 一个 |
+| **websocket** | 每个 WebSocket 会话一个 |
 
-**判断标准**：这个对象有没有**可变状态**。
+### 27. 如果一个 `prototype` 作用域的 Bean 被注入到 `singleton` 的 Bean 中，会发生什么？怎么解决？
 
-- **无状态** → `singleton`：`Service`、`Dao`、工具类，线程安全，复用实例
-- **有状态** → `prototype`：每次请求需要独立数据，用完即弃
-
-### 各作用域实战示例
-
-```java
-// ==================== singleton（默认） ====================
-@Service
-public class UserService {
-    // 无状态，线程安全，整个应用共享一个实例
-    public User getUser(Long id) { ... }
-}
-
-// ==================== prototype ====================
-@Scope(ConfigurableBeanFactory.SCOPE_PROTOTYPE)
-@Component
-public class ExcelExportTask {
-    // 每次导出都是一个新任务对象，各自持有独立的文件路径和进度
-    private String filePath;
-    private int progress;
-
-    public void export() { ... }
-}
-
-// ==================== request ====================
-@Component
-@Scope(value = WebApplicationContext.SCOPE_REQUEST, proxyMode = ScopedProxyMode.TARGET_CLASS)
-public class RequestContextHolder {
-    // 每个 HTTP 请求一个实例，存当前请求的 traceId、用户信息等
-    private String traceId;
-    private Long userId;
-
-    // 注意：需配合代理模式，否则 singleton 注入时会报错
-}
-
-// ==================== session ====================
-@Component
-@Scope(value = WebApplicationContext.SCOPE_SESSION, proxyMode = ScopedProxyMode.TARGET_CLASS)
-public class UserShoppingCart {
-    // 每个用户 Session 一个购物车，登录期间跨请求共享
-    private final List<CartItem> items = new ArrayList<>();
-
-    public void addItem(CartItem item) { items.add(item); }
-    public List<CartItem> getItems() { return items; }
-}
-
-// ==================== application ====================
-@Component
-@Scope(WebApplicationContext.SCOPE_APPLICATION, proxyMode = ScopedProxyMode.TARGET_CLASS)
-public class AppConfigHolder {
-    // 整个应用生命周期只有一个实例，类似 ServletContext 属性
-    private Map<String, String> configMap;
-}
-
-// ==================== websocket ====================
-@Component
-@Scope(WebApplicationContext.SCOPE_WEBSOCKET, proxyMode = ScopedProxyMode.TARGET_CLASS)
-public class WebSocketSessionContext {
-    // 每个 WebSocket 连接一个实例，存储该连接的会话信息
-    private String sessionId;
-    private String userName;
-}
-```
-
-> **注意**：`request`、`session`、`application`、`websocket` 均需在 Web 环境下使用，且需要设置 `proxyMode = TARGET_CLASS`（或 `INTERFACES`）做**作用域代理**，否则注入到 `singleton` 时会因为生命周期不匹配报错。
-
-### 面试加分点：prototype 注入到 singleton 的问题
-
-`prototype` Bean 被注入到 `singleton` 时，**Spring 只创建一次 prototype 实例**（注入时创建），之后 singleton 永远用的是同一个 prototype 实例。原因：singleton 创建时依赖注入只发生一次。
-
-**解决方案**：
-1. 改用 `ObjectProvider<Bean>`（推荐），每次调用 `getObject()` 获取新实例
-2. 不用注入，通过 `ApplicationContext.getBean()` 手动获取
+> singleton 在容器里只有一个实例，所以只会被创建一次；prototype 的特性（每次向容器获取都是新创建）就丢失了。
+>
+> **解决办法：**
 
 ```java
 // 方案一：ObjectProvider（推荐）
@@ -884,14 +545,58 @@ public class OrderService {
 }
 ```
 
-### 27. 如果一个 `prototype` 作用域的 Bean 被注入到 `singleton` 的 Bean 中，会发生什么？怎么解决？
-
 ### 28. Spring 怎么解决循环依赖的？三级缓存各自存的是什么？为什么必须是三级，两级行不行？
 
-参看  Spring核心知识.md
+| 缓存级别 | 存放内容 | 说明 |
+|---------|---------|------|
+| **一级缓存** | 完整 Bean（可直接使用） | `singletonObjects` |
+| **二级缓存** | 提前曝光的对象（属性未填充） | `earlySingletonObjects` |
+| **三级缓存** | 对象工厂（可能产生 A 或 proxyA） | `singletonFactories` |
+
+```mermaid
+flowchart TB
+    subgraph L1["第①层：A 创建"]
+        direction LR
+        A1["1.实例化 A"] --> A2["2.A 入三级缓存 📦 L3:{A→λ}"] --> A3["3.填充 A 属性"]
+    end
+
+    L1 -- "发现需注入 B" --> L2
+
+    subgraph L2["第②层：B 创建"]
+        direction LR
+        B1["4.查缓存找 B: L1❌ L2❌ L3❌"] --> B2["5.实例化 B"] --> B3["6.B 入三级缓存 📦 L3:{A→λ, B→λ}"] --> B4["7.填充 B 属性"]
+    end
+
+    L2 -- "发现需注入 A → 查缓存" --> L3
+
+    subgraph L3["第③层：三级缓存命中"]
+        direction LR
+        C1["8.查缓存找 A: L1❌ L2❌ L3✅"] --> C2["9.getObject() 生成 A 早期引用"] --> C3["10.A 早期引用 → 二级缓存<br/>📦 L2:{A} L3:{B→λ}"]
+    end
+
+    L3 -- "B 拿到 A 的早期引用" --> L4
+
+    subgraph L4["第④层：B 完成"]
+        direction LR
+        D1["11.B 属性填充完成"] --> D2["12.B 初始化"] --> D3["13.B → 一级缓存<br/>📦 L1:{B} L2:{A}"]
+    end
+
+    L4 -- "A 拿到完整 B" --> L5
+
+    subgraph L5["第⑤层：A 完成"]
+        direction LR
+        E1["14.A 属性填充完成"] --> E2["15.A 初始化"] --> E3["16.A → 一级缓存<br/>📦 L1:{A,B} L2:空 L3:空 ✅"]
+    end
+
+    style C1 fill:#ff9800,color:#fff
+    style E3 fill:#4caf50,color:#fff
+    style A2 fill:#e3f2fd
+    style B3 fill:#e3f2fd
+    style C3 fill:#fff3e0
+```
 
 ---
 
-### 29. 构造器注入的循环依赖能解决吗？为什么？
+### 29. 构造器注入的循环依赖能解决吗？
 
-**不能解决，直接抛异常。**
+> **不能。** 三级缓存需要先把 Bean 实例化后才能放入，而构造器注入时对象还没实例化完成（卡在构造方法等参数），没有半成品可缓存，所以无法破环。 
