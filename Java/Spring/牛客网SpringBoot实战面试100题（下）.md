@@ -2,374 +2,127 @@
 
 ---
 
-## 四、AOP 面向切面编程（5 题）
-
-### 30. AOP 的实现原理是什么？
-
-**实现原理：**
-
-Spring AOP 基于**动态代理**。
-
-#### 代理生成的完整时机（结合 Bean 生命周期 + 三级缓存）
-
-> **正常情况**下，代理在 Bean 初始化之后生成；如果存在**循环依赖**，代理会**提前**生成。下面这张图把创建 Bean 的完整源码流程（`doCreateBean`）和依赖注入、代理生成都串起来：
-
-```
-doGetBean("A")
-  │
-  ├─ getSingleton("A")          // ① 查一二三级缓存
-  │     一级(成品) → 二级(早期) → 三级(工厂)
-  │     命中直接返回；没命中 → 继续 createBean
-  │
-  └─ createBean("A")
-        │
-        └─ doCreateBean("A")
-              │
-              ├─ createBeanInstance()        ②【实例化】反射调构造方法 → 半成品对象
-              │
-              ├─ addSingletonFactory("A", ObjectFactory)
-              │     ③ 把"工厂"丢进【第三级缓存】← 循环依赖时代理从这里提前出来
-              │        (注意：此刻还没生成代理，只是登记了能生成代理的能力)
-              │
-              ├─ populateBean()              ④【依赖注入 / 属性注入】@Autowired 在这
-              │     │
-              │     └─ 注入 B → 又触发 doGetBean("B") → B 也走到这一步注入 A
-              │           │
-              │           └─ B 要 A，查缓存：一二三级都没有成品 → 命中三级工厂
-              │                 ─────────────────────────────────────────
-              │                 getEarlyBeanReference("A")  ★ 提前生成 A 的代理
-              │                 把 A 的代理放进【第二级缓存】返回给 B
-              │                 ─────────────────────────────────────────
-              │                 (仅当 A 存在循环依赖，才会走这条提前路径)
-              │
-              └─ initializeBean()            ⑤【初始化】（此时 Bean 还在"裸"状态）
-                    │
-                    ├─ invokeAwareMethods()         BeanNameAware/BeanFactoryAware...
-                    │
-                    ├─ applyBeanPostProcessors
-                    │     └─ BeforeInitialization   @PostConstruct 在这(CommonAnnotationBP)
-                    │
-                    ├─ invokeInitMethods()          afterPropertiesSet + init-method
-                    │
-                    └─ applyBeanPostProcessors
-                          └─ AfterInitialization
-                                └─ AbstractAutoProxyCreator
-                                     .postProcessAfterInitialization()
-                                        → wrapIfNecessary() → createProxy()
-                                        ★★★ 正常情况下，代理在这里生成 ★★★
-```
-
-> **一个 Bean 变成代理的时机不确定，有两种可能：**
-> - 如果它在**属性注入阶段被循环依赖地需要**了 → 提前在 `getEarlyBeanReference()` 变成代理；
-> - 否则 → 在初始化之后、`BeanPostProcessor` 的 `after` 方法里变成代理。
-
----
-
-
-
-### 31. `@Before`、`@After`、`@AfterReturning`、`@AfterThrowing`、`@Around` 的执行顺序是怎样的？
-
-**正常流程：**
-
-```
-@Around（前半段）
-  → @Before
-    → 目标方法执行
-  → @AfterReturning
-  → @After
-@Around（后半段）
-```
-
-**异常流程：**
-
-```
-@Around（前半段）
-  → @Before
-    → 目标方法抛异常
-  → @AfterThrowing
-  → @After
-@Around（后半段，catch 异常后不再继续）
-```
-
-> `@After` 类似 finally，无论正常还是异常都会执行。`@AfterReturning` 和 `@AfterThrowing` 二选一，不会同时触发。`@Around` 最外层，可以决定是否调用目标方法。
-### 32. 你在项目中用 AOP 做过哪些事？具体怎么实现的？
-
-> 回答框架：做了什么 → 为什么用 AOP → 怎么做的（4 步）
-
-**我做过的两个场景：枚举翻译、用户数据脱敏。**
-
-
-
-
-### 33. AOP 的自调用问题是什么？为什么同一个类里调用 `@Transactional` 方法不走代理？怎么解决？
-
-**原因**：代理对象和目标对象是两个不同的对象。代理确实重写了所有方法，但方法内部的 `this` 指向的是**目标对象**，不是代理对象，所以 `this.methodB()` 绕过了代理。
-
-
-
-**调用链对比：**
-
-```
-外部调 methodA()：
-  Controller → Proxy.methodA()（事务生效）
-                → target.methodA()
-                    → this.methodB()  ← this 是 target，不是 Proxy
-                    → target.methodB()（没有经过 Proxy，事务不生效）
-
-外部直接调 methodB()：
-  Controller → Proxy.methodB()（事务生效）✅
-```
-
-
-### 35. Spring 的事务传播机制有哪几种？`REQUIRED`、`REQUIRES_NEW`、`NESTED` 有什么区别？你在项目中怎么选的？
-
-**7 种传播行为一览：**
-
-| 传播行为 | 有事务时 | 没事务时 | 用途 |
-|---------|---------|---------|------|
-| **REQUIRED**（默认） | 加入当前事务 | 新建一个 | 大多数场景的默认选择 |
-| **SUPPORTS** | 加入当前事务 | 非事务执行 | 查询方法 |
-| **MANDATORY** | 加入当前事务 | 抛异常 | 强制要求在事务中调用 |
-| **REQUIRES_NEW** | 挂起当前事务，新建一个 | 新建一个 | 独立事务，不受外层回滚影响 |
-| **NOT_SUPPORTED** | 挂起当前事务，非事务执行 | 非事务执行 | 不需要事务的操作 |
-| **NEVER** | 抛异常 | 非事务执行 | 强制要求不在事务中调用 |
-| **NESTED** | 在当前事务中创建保存点（Savepoint） | 新建一个 | 嵌套事务，内层可独立回滚 |
-
-
-
-
-### 36. `@Transactional` 注解在什么情况下会失效？列举至少 5 种场景。
-
-| # | 场景 | 原因 | 解决 |
-|---|------|------|------|
-| 1 | **同类自调用** | `this.methodB()` 绕过代理 | 拆类 / `AopContext.currentProxy()` |
-| 2 | **方法非 public** | Spring AOP 只拦截 public 方法 | 改为 public |
-| 3 | **方法被 final/static 修饰** | CGLIB 无法重写 final/static 方法 | 去掉 final/static |
-| 4 | **异常被 try-catch 吞掉** | 事务感知不到异常，不会回滚 | catch 后手动 `throw` 或 `setRollbackOnly()` |
-| 5 | **抛出 checked 异常** | 默认只回滚 `RuntimeException` 和 `Error` | `@Transactional(rollbackFor = Exception.class)` |
-| 6 | **数据库引擎不支持事务** | MyISAM 不支持事务 | 用 InnoDB |
-| 7 | **Bean 未被 Spring 管理** | 没加 `@Service` 等注解，不是 Spring Bean | 加上注解 |
-| 8 | **传播行为设错** | `NOT_SUPPORTED` / `NEVER` 本身就不用事务 | 检查 propagation 设置 |
-
-> 面试说前 5 个就够了，第 5 个顺带提一嘴 `rollbackFor = Exception.class` 是最佳实践。
-### 37. 自调用导致事务失效怎么解决？除了把方法拆到另一个类还有别的办法吗？
-
-> 原理同第 33 题：`this.methodB()` 绕过代理，事务不生效。核心就是拿到代理对象来调用。
-
-**三种解决方式：**
-
-**① 注入自身（最常用）**
-
-```java
-@Service
-public class UserService {
-    @Autowired
-    private UserService self;  // 注入自己的代理对象
-
-    public void methodA() {
-        self.methodB();  // 通过代理调用，事务生效
-    }
-
-    @Transactional
-    public void methodB() { ... }
-}
-```
-
-> 注意：不会循环依赖，因为 Spring 三级缓存会先暴露早期引用。但如果构造器里就用会报 NPE。
-
-**② AopContext 获取当前代理**
-
-```java
-// 启动类加：
-@EnableAspectJAutoProxy(exposeProxy = true)
-
-// 使用：
-((UserService) AopContext.currentProxy()).methodB();
-```
-
-> 优点：不用注入自己，代码侵入小。缺点：依赖 Spring AOP 内部 API，且必须在 Spring 管理的线程内调用。
-
-**③ 拆到另一个类（最干净）**
-
-```java
-@Service
-public class UserService {
-    @Autowired
-    private OrderService orderService;
-
-    public void methodA() {
-        orderService.methodB();  // 天然走代理
-    }
-}
-```
-
-> 优点：没有 hack，符合设计原则。缺点：有时业务上两个方法就是属于同一个类，强行拆不合理。
-
-**面试怎么答**：先说三种方式，然后说"生产中简单场景用 `AopContext`，复杂场景优先拆类"。
-
-### 41. 声明式事务和编程式事务各有什么优缺点？你一般在什么场景用编程式事务？
-
-**一句话：声明式用注解（`@Transactional`），编程式手动写代码控制。**
-
-| | 声明式事务 | 编程式事务 |
-|---|---|---|
-| **用法** | `@Transactional` 注解 | `TransactionTemplate` 或 `PlatformTransactionManager` |
-| **原理** | AOP 代理 + `TransactionInterceptor` | 手动调 `getTransaction/commit/rollback` |
-| **优点** | 简洁，业务代码无侵入 | 控制精细，范围可随心所欲 |
-| **缺点** | 粒度只能到方法级；自调用/多线程易失效 | 代码侵入，啰嗦 |
-| **常用度** | 90% 场景用这个 | 少数精细控制场景 |
-
-```java
-// 声明式 —— 一个注解搞定
-@Transactional
-public void createUser(User u) {
-    userMapper.insert(u);
-}
-
-// 编程式 —— TransactionTemplate
-public void createUser(User u) {
-    transactionTemplate.execute(status -> {        // 手动开启事务
-        userMapper.insert(u);
-        logMapper.insert(log);
-        return null;
-    });                                            // 自动 commit / rollback
-}
-```
-
-**什么场景用编程式：**
-
-1. **事务范围要小于方法**：方法里只有中间几步需要事务，前后还有发 MQ、调远程，用声明式会让整个方法都在事务里（长事务）
-2. **批量循环逐条提交**：导入大量数据，每 N 条提交一次，某条失败不影响其他
-3. **多线程 / 异步**：声明式靠 ThreadLocal 绑定 Connection，子线程拿不到
-4. **动态决定回滚**：复杂条件下用 `status.setRollbackOnly()` 更灵活
-
-> **日常 99% 用声明式；只有「事务范围精细控制」或「脱离 AOP 上下文（多线程）」时才上编程式。**
-
-## 六、Spring MVC 核心技术（6 题）
-
-### 42. Spring MVC 一次请求的完整处理流程是怎样的？从 DispatcherServlet 开始一步步说清楚。
-
-**核心一句话：请求都进 `DispatcherServlet`，它负责找 Controller、调 Controller、处理结果。**
-
-```text
-浏览器请求
-   │
-   ▼
-① DispatcherServlet（前端控制器，统一入口）
-   │
-   ├─② HandlerMapping：根据 URL 找到 Handler（Controller 方法）+ 拦截器链
-   │      返回 HandlerExecutionChain
-   │
-   ├─③ HandlerAdapter：真正调用 Controller 方法
-   │      ├─ 拦截器 preHandle()
-   │      ├─ 参数解析 + 数据绑定，执行 Controller
-   │      ├─ 拦截器 postHandle()
-   │      └─ 返回 ModelAndView（@ResponseBody 则直接写 JSON）
-   │
-   ├─④ ViewResolver：解析视图（返回 JSON 的接口跳过这步）
-   │
-   └─⑤ 渲染视图 → 响应浏览器
-        最后执行拦截器 afterCompletion()
-```
-
-**三个最关键的组件：**
-
-| 组件 | 作用 |
-|---|---|
-| **HandlerMapping** | URL → Controller 方法的映射（`@RequestMapping`） |
-| **HandlerAdapter** | 真正执行 Controller 方法，处理参数绑定 |
-| **ViewResolver** | 视图名 → 视图对象 |
-
-> **REST 接口特殊点：** `@RestController`/`@ResponseBody` 不走 `ViewResolver`，返回值由 `HttpMessageConverter`（如 `MappingJackson2HttpMessageConverter`）直接序列化成 JSON 写回响应。
-
-### 43. 拦截器（Interceptor）和过滤器（Filter）的区别是什么？执行顺序是怎样的？
-
-
-
-**执行顺序（结合 DispatcherServlet）：**
-
-```text
-请求
-  │
-  ▼
-Filter1.doFilter(前)  ──────────────────────┐  Filter 在最外层（洋葱模型）
-  Filter2.doFilter(前)  ───────────────────┐ │
-    │                                      │ │
-    ▼  DispatcherServlet.doDispatch()      │ │
-    │                                      │ │
-    ├─ Interceptor1.preHandle   (顺序)     │ │  Interceptor 在内部
-    ├─ Interceptor2.preHandle   (顺序)     │ │  包裹 Controller
-    │     ▼  Controller 执行                │ │
-    ├─ Interceptor2.postHandle  (逆序)     │ │
-    ├─ Interceptor1.postHandle  (逆序)     │ │
-    │     ▼  视图渲染                       │ │
-    ├─ Interceptor2.afterCompletion(逆序)  │ │
-    └─ Interceptor1.afterCompletion(逆序)  │ │
-    │                                      │ │
-    ▼  DispatcherServlet 结束              │ │
-  Filter2.doFilter(后)  ──────────────────┘ │
-Filter1.doFilter(后)  ──────────────────────┘
-  │
-  ▼
-响应
-```
-
-> **重要认知：** Filter **不是 Tomcat 提供的**，而是 **Servlet 规范**定义的接口，Tomcat 只是规范的实现者之一（换 Jetty / Undertow 照样能用）；Interceptor 才是 Spring 自己的。所以 **Filter 属于 Servlet 规范（被容器驱动），Interceptor 属于 Spring（被 DispatcherServlet 驱动）**。
-
-> **记忆口诀：** Filter 是"保安"（门口，啥都拦，不懂业务）；Interceptor 是"秘书"（进了门，知道你找谁、能不能见）。
-
-### 44. 如何在 Spring Boot 中做统一的参数校验？`@Valid`、`@Validated`、自定义校验注解怎么用？
-### 45. 全局异常处理怎么实现？`@ControllerAdvice` + `@ExceptionHandler` 的原理是什么？
-
-### 47. 如何在 Spring Boot 中做接口的幂等性校验？有几种方案？
-
-**一句话：幂等 = 同一个请求执行一次和多次，结果完全一样。**
-
-#### 我的方案：Redis 锁 + 业务状态校验
-
-> 以支付接口为例：先用 Redis 锁挡住**并发**，再校验业务**状态**，双重保险。
-
-```java
-@Transactional
-public void payOrder(String orderId) {
-    String lockKey = "pay:lock:" + orderId;
-    // ① Redis 锁：防并发（同一订单同时只能一个请求进来）
-    Boolean locked = redisTemplate.opsForValue()
-            .setIfAbsent(lockKey, "1", 30, TimeUnit.SECONDS);
-    if (!locked) {
-        throw new BizException("正在处理，请勿重复提交");
-    }
-    try {
-        // ② 业务状态校验：防重复（已支付的订单不能再付）
-        Order order = orderMapper.selectById(orderId);
-        if (order.getStatus() == OrderStatus.PAID) {
-            throw new BizException("订单已支付");
-        }
-        // ③ 执行支付、更新状态
-        doPay(order);
-        order.setStatus(OrderStatus.PAID);
-        orderMapper.updateById(order);
-    } finally {
-        redisTemplate.delete(lockKey);   // 释放锁
-    }
-}
-```
-
-> **两层各自的作用：**
-> - **Redis 锁**：挡**并发**（同一时刻两个请求同时进来，只放行一个）
-> - **业务状态校验**：挡**重复**（不管什么时候，已支付的订单不能再付）
->
-> 生产建议用 **Redisson** 的分布式锁（自带看门狗续期、可重入），比 `setIfAbsent` 更稳。
-
----
-
-#### 防重复提交 vs 幂等的区别
-
-> **关键区别：** 防重复提交只在"短时间窗口"内生效，窗口一过还能再提交；幂等是"任何时候"重复都保证结果一致。所以防重复提交防不住"跨时间的重复"，真正兜底还得靠幂等（状态校验 / 唯一索引）。
-
 ## 十、分布式与微服务（10 题）
 
 ### 71. 你把单体项目拆成微服务的依据是什么？你是怎么划分服务边界的？
+
+> **核心观点：拆微服务不是因为"微服务很火"，而是单体已经实实在在拖后腿了。拆分边界不是拍脑袋，是用 DDD 的限界上下文来切。**
+
+---
+
+#### 一、什么时候该拆？—— 单体的"疼痛信号"
+
+不是所有项目都要拆。以下 4 个信号，**出现 2 个以上才考虑拆**：
+
+| 疼痛信号 | 具体表现 | 为什么单体搞不定 |
+|---|---|---|
+| **团队膨胀** | 10+ 人同时改一个代码库，Git 冲突天天有，每次发布要协调所有人 | 单体代码库没有物理隔离，一个模块改崩了，所有人的发布都被阻塞 |
+| **性能局部热点** | 订单模块 CPU 常年 80%，用户模块却很闲，但只能整体扩容 | 单体是"一个 war 包部署"，无法按模块独立扩缩容，造成资源浪费 |
+| **业务耦合蔓延** | 改订单逻辑不小心把用户模块的查询搞挂了，测试不敢只测自己模块 | 没有代码层面的强制边界，依赖容易腐化，最终变成"大泥球" |
+| **交付速度下降** | 一个新功能从开发到上线要 2 周，因为每次都要全量回归测试 | 单体 CI/CD 是全量构建 + 全量测试，代码量越大越慢 |
+
+**面试话术**：先说"我不建议项目一开始就上微服务"，再列出上面的判断标准，面试官会觉得你务实、有经验。
+
+---
+
+#### 二、怎么划分服务边界？—— DDD 限界上下文
+
+拆分微服务最怕的是**切错了边界**，导致"分布式单体"——服务拆了，但调用链跟单体一样紧耦合，改了 A 服务，B、C 也得跟着改。
+
+业界公认的做法是用 **DDD（领域驱动设计）** 来指导拆分，核心工具是**限界上下文（Bounded Context）**。
+
+##### 2.1 先理解几个关键概念
+
+| 概念 | 一句话解释 | 类比 |
+|---|---|---|
+| **领域（Domain）** | 你要解决的整个业务范围 | 整个电商系统 |
+| **子域（Subdomain）** | 领域中相对独立的一块业务 | 订单、商品、用户、支付 |
+| **限界上下文（Bounded Context）** | 一个子域中，某个概念有明确含义的范围 | "用户"在认证上下文里指账号密码，在会员上下文里指等级积分 |
+| **通用语言（Ubiquitous Language）** | 团队内部统一的业务术语，代码和对话都用同一套语言 | 不要叫 `User` 又叫 `Member` 又叫 `Account` |
+
+##### 2.2 拆分的具体步骤
+
+```
+第一步：事件风暴（Event Storming）—— 和产品、业务方一起梳理业务流程
+
+   "用户下单"这个动作涉及哪些东西？
+   用户 → 浏览商品 → 加购物车 → 下单 → 支付 → 减库存 → 发货
+
+第二步：识别子域和限界上下文
+
+   把上面的流程按"业务能力"分组：
+
+   商品上下文：商品信息、SKU、库存（注意：这里的库存是"可售库存"）
+   订单上下文：订单创建、订单状态流转
+   支付上下文：支付单、退款、对账
+   用户上下文：用户基本信息、认证、会员等级
+   物流上下文：发货、物流轨迹
+
+第三步：确定上下文之间的关系（Context Mapping）
+
+   上下文之间怎么协作？用图画出关系：
+   - 上游/下游（U/D）：订单是商品的下游，依赖商品提供的信息
+   - 防腐层（ACL）：对接外部系统时加一层隔离，比如对接第三方支付
+   - 共享内核（Shared Kernel）：两个上下文共享一部分模型（尽量少用）
+   - 发布/订阅（事件驱动）：用消息队列解耦，比如"订单已支付"→ 发事件 → 库存扣减
+
+第四步：一个限界上下文 = 一个微服务，独立数据库
+
+   商品服务 → 商品库
+   订单服务 → 订单库
+   支付服务 → 支付库
+   每个服务只能访问自己的数据库，数据交互通过 API 或消息队列
+```
+
+##### 2.3 具体案例：电商系统如何划分
+
+假设你有一个电商单体，包含用户、商品、订单、支付、物流这些模块。用 DDD 拆成下面这样：
+
+```yaml
+核心域（你的核心竞争力，重点投入）:
+  - 订单服务: 订单创建、状态机流转、订单查询
+  - 商品服务: 商品信息、SKU 管理、价格管理
+
+支撑域（辅助核心业务运转）:
+  - 支付服务: 对接支付宝/微信，支付单管理、退款
+  - 用户服务: 注册登录、用户信息、会员等级
+  - 物流服务: 发货单、物流轨迹查询
+
+通用域（可以用现成方案的）:
+  - 消息通知: 短信、邮件、App Push
+  - 文件存储: OSS/MinIO
+```
+
+微服务之间的调用关系（不是画全图，是说清楚依赖方向）：
+
+- 订单服务**同步调用**商品服务（下单时需要查价格、验库存）
+- 订单服务**同步调用**用户服务（下单时需要验证用户状态）
+- 订单创建成功后**发送异步事件** → 支付服务监听、商品服务扣库存
+- 支付服务支付成功**发送异步事件** → 订单服务改状态、物流服务创建发货单
+
+---
+
+#### 三、拆分时的硬原则（背下来，面试必用）
+
+| 原则 | 含义 | 为什么重要 |
+|---|---|---|
+| **一个服务一个数据库** | 每个微服务独占数据库，不允许直接连别人的库 | 如果不隔离数据库，服务之间可以通过 SQL JOIN 绕过 API，边界就白划了 |
+| **高内聚、低耦合** | 一个上下文内变更频繁的东西放一起，跨上下文变更少的才分开 | 避免"改一个功能要动 3 个服务"的噩梦 |
+| **数据主权** | 谁拥有这个数据，谁负责修改。其他服务想改，必须通过 API | 用户服务拥有用户手机号，订单服务想改？不行，调用户服务的接口 |
+| **康威定律** | 系统架构会镜像团队沟通结构 | 如果两个模块由同一个小组维护，可以晚点再拆；跨组维护的就应该拆成独立服务 |
+| **先粗后细** | 刚开始别拆太细，3-5 个服务足够 | 粒度太细会导致"微服务地狱"：分布式事务、链路追踪、运维复杂度爆炸 |
+
+---
+
+#### 四、面试总结话术
+
+> "判断要不要拆，我主要看四个信号：团队规模是否导致频繁冲突、是否有局部性能热点需要独立扩缩容、业务耦合是否影响了交付速度、以及是否存在明显的业务边界。
+>
+> 拆分边界我用 DDD 的限界上下文来指导——先做事件风暴梳理业务流程，按业务能力聚类识别子域，然后一个限界上下文对应一个微服务，每个服务独占数据库。核心原则是高内聚低耦合和数据主权，尽量避免分布式事务，能用异步事件解耦的就用事件。
+>
+> 另外我不会一上来就拆得很细，通常先拆 3-5 个核心服务跑一段时间，验证边界合理后再继续细化。"
+
+
 ### 72. 服务注册与发现是怎么工作的？Nacos 和 Eureka 有什么核心区别？
 ### 73. 负载均衡策略有哪些？Ribbon 的轮询、随机、加权轮询分别怎么用？
 ### 74. 服务间调用（OpenFeign / Dubbo）你怎么选的？底层原理是什么？
@@ -860,35 +613,8 @@ stream
 
 ### 98. 介绍一个你觉得最有挑战的项目。中间遇到了什么问题？怎么解决的？用到了哪些 Spring Boot 技术？
 ### 99. 你的项目中如果突然流量翻了 10 倍，哪些地方会最先出问题？你会怎么改造？
+
 ### 100. 你平时怎么学习 Spring Boot 的？看过哪些源码？有什么学习习惯？
 
 ---
 
-## 题目分类速览
-
-| 分类 | 题号 | 题数 |
-|------|------|------|
-| Spring Boot 基础与核心原理 | 1-13 | 13 |
-| 自动配置与 Starter 机制 | 14-21 | 8 |
-| IoC 容器与 Bean 生命周期 | 22-29 | 8 |
-| AOP 面向切面编程 | 30-34 | 5 |
-| 事务管理 | 35-41 | 7 |
-| Spring MVC 核心技术 | 42-47 | 6 |
-| 数据库与持久层 | 48-54 | 7 |
-| 缓存实战 | 55-63 | 9 |
-| 消息队列实战 | 64-70 | 7 |
-| 分布式与微服务 | 71-80 | 10 |
-| 安全与鉴权 | 81-84 | 4 |
-| 性能优化与监控 | 85-90 | 6 |
-| 场景设计题 | 91-97 | 7 |
-| 项目实战深挖 | 98-100 | 3 |
-
-> **共计：100 题**
-
----
-
-> **使用建议：**
-> 1. 先按分类逐个吃透，基础类 → 原理类 → 实战类 → 场景设计类
-> 2. 每道题自己先答一遍，再到牛客网上搜对应面经对比
-> 3. 场景题没有标准答案，重点练"分析问题 → 提出方案 → 对比优缺点"的思路
-> 4. 结合你实际做的项目，每道题想想"我在项目中遇到过类似的问题吗"
