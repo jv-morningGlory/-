@@ -27,166 +27,65 @@
 
 ## 2. Spring Data Redis 集成
 
-### 2.1 依赖配置
+### 2.1 客户端选型：Jedis / Lettuce / Redisson
 
-```xml
-<dependency>
-    <groupId>org.springframework.boot</groupId>
-    <artifactId>spring-boot-starter-data-redis</artifactId>
-    <exclusions>
-        <!-- 排除默认 logging，使用项目统一的日志框架 -->
-        <exclusion>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-logging</artifactId>
-        </exclusion>
-    </exclusions>
-</dependency>
+| 客户端 | 连接模型 | 线程安全 | 连接池 | 定位 |
+|--------|---------|---------|--------|------|
+| **Jedis** | 直连，一连接一线程 | 否（必须池化） | commons-pool2 | 老牌，API 简单 |
+| **Lettuce** | 基于 Netty，单连接可共享 | 是 | 内置（需 commons-pool2） | Spring Boot 默认客户端 |
+| **Redisson** | 基于 Netty | 是 | 内置 | 分布式工具箱（锁、限流、延迟队列） |
 
-<dependency>
-    <groupId>org.apache.commons</groupId>
-    <artifactId>commons-pool2</artifactId>
-    <version>2.9.0</version>
-</dependency>
-```
+> **日常组合**：`RedisTemplate` / `StringRedisTemplate` 走 **Lettuce**（Spring 默认，零配置）；分布式锁、限流、延迟队列等走 **Redisson**。两者连同一个 Redis，各用各的连接池，互不影响。
 
-### 2.2 Lettuce 连接池配置
+---
 
-**池技术（Pooling）** 是一种**空间换时间**的优化手段：预先创建一批对象放入"池"中，使用时从池中借用，用完归还，避免反复创建/销毁对象的开销。
+### 2.2 池技术本质：省时间 + 保命
 
-```
-不使用池：每次请求 → new 对象 → 用完 → 销毁（GC）
-使用池：  首次初始化 → 创建 N 个对象放入池 →
-          请求 → borrow（借用）→ 用完 → return（归还）
-```
+> **池 = 复用（省时间）+ 限流（保命）**
 
-**为什么需要连接池？**
+- **省时间**：每次新建连接要经历 `TCP 三次握手 + 协议握手 + AUTH 鉴权`（2~3 个 RTT），跨机房几十毫秒。池复用已有连接，直接 borrow 就能用。
+- **保命**：`max-active` 限制最大连接数。没有上限，高并发下应用会无限制建连接，瞬间打垮 Redis（**Redis 单线程**，连接过多会拖慢所有命令）。
 
-| 对比 | 无连接池 | 有连接池 |
-|------|---------|---------|
-| TCP 连接 | 每次新建，用完关闭 | 复用已有连接 |
-| 三次握手 | 每次都发生 | 仅首次 |
-| TIME_WAIT | 频繁出现，消耗端口 | 可忽略 |
-| 响应延迟 | 高（建连 ~10ms） | 低（直接获取） |
+#### 池如何保证连接可用、并一直保持住？
 
-**池化技术的通用配置维度：**
+**问题**：TCP 连接会"偷偷死掉"——防火墙/NAT 静默回收空闲连接、Redis 重启、网络中断，导致**半开连接**（socket 显示已连接，但实际链路已断，下次操作才报错）。
 
-| 配置维度 | 连接池参数 | 线程池参数 | 含义 |
-|---------|-----------|-----------|------|
-| **核心容量** | `min-idle` | `core-pool-size` | 池中最少保留的资源数，避免空池首次请求的创建开销 |
-| **最大容量** | `max-active` / `max-idle` | `max-pool-size` | 池中允许的最大资源数，防止资源耗尽 |
-| **获取超时** | `max-wait` | `keep-alive-time` + 拒绝策略 | 资源耗尽时，新请求等待多久 / 如何处理 |
-| **空闲回收** | `time-between-eviction-runs` | `keep-alive-time` | 超过核心数的空闲资源多久后回收 |
-| **健康检查** | `test-on-borrow` / `test-while-idle` | — | 借出前/定期验证资源是否可用 |
+**池的应对**：
 
-**线程池工作流程：**
+| 机制 | 作用 |
+|------|------|
+| `test-on-borrow` | 借出连接前先 `PING` 一下，坏了就丢掉重建 |
+| `test-while-idle` | 空闲时定期检测池中连接是否健康 |
+| `time-between-eviction-runs` | 后台检测线程的运行间隔 |
+| **心跳** | Lettuce / Redisson 底层定时发命令，保持连接活跃 |
 
-```
-提交任务 → 核心线程数未满？ → 创建新线程执行
-            ↓ 已满
-         工作队列未满？ → 入队等待
-            ↓ 已满
-         最大线程数未满？ → 创建新线程执行
-            ↓ 已满
-         执行拒绝策略
-```
+> 池中的连接"一直活着"，不是 TCP 自己活着的，而是**池在主动探测和续命**。
 
-**线程池任务队列：**
+---
 
-| 队列类型 | 特点 | 适用场景 |
-|---------|------|---------|
-| `SynchronousQueue` | 不存储任务，提交一个必须有一个线程来接 | 任务少、要求即时响应（CachedThreadPool 默认） |
-| `LinkedBlockingQueue` | 无界链表队列（可设容量），FIFO | 任务平稳、能容忍排队（FixedThreadPool 默认） |
-| `ArrayBlockingQueue` | 有界数组队列，必须指定容量 | 需要严格控制内存、防止 OOM |
-| `PriorityBlockingQueue` | 无界优先级队列，按任务优先级排序 | 任务有优先级区分 |
+### 2.3 Spring Boot 连接池核心参数
 
-> **为什么要有队列？** 突发流量时作为缓冲区，避免无限制创建线程导致系统崩溃。核心线程忙 → 任务堆在队列 → 队列满了才扩到最大线程数。
-
-**线程池拒绝策略：**
-
-| 策略 | 行为 | 适用场景 |
-|------|------|---------|
-| `AbortPolicy`（默认） | 抛出 `RejectedExecutionException` | 必须感知任务丢失的场景 |
-| `CallerRunsPolicy` | 由提交任务的线程自己执行 | 能接受调用者被阻塞，提供天然的限流缓冲 |
-| `DiscardPolicy` | 直接丢弃，不抛异常 | 允许丢失非关键任务（日志、埋点） |
-| `DiscardOldestPolicy` | 丢弃队列中最旧的任务，重试提交新任务 | 新任务优先于旧任务 |
-
-> **推荐**：关键业务用 `CallerRunsPolicy` 配合监控告警；非关键任务用 `DiscardPolicy`。
-
-**线程池大小估算：**
-
-| 任务类型 | 公式 | 说明 |
-|---------|------|------|
-| 计算密集型 | `N + 1` | N=CPU 核数，+1 应对线程偶尔阻塞 |
-| IO 密集型 | `2N` 或 `N * (1 + WT/ST)` | WT=等待时间，ST=计算时间，需压测确认 |
-| 混合型 | 拆分为两个线程池分别配置 | 避免 IO 任务占满所有线程 |
-
-> **最终要压测**：公式只是起点，实际最优值必须通过压测确定。
-
-**连接池 vs 线程池对比：**
-
-| 维度 | 连接池 | 线程池 |
-|------|--------|--------|
-| **池中是什么** | TCP 连接（网络资源） | 线程（CPU 资源） |
-| **核心开销** | 三次握手 + 认证 | 线程创建 + 上下文切换 |
-| **队列** | 通常直接阻塞等待（`max-wait`） | 有独立工作队列，队列满了才拒绝 |
-| **资源上限因素** | 数据库/Redis 最大连接数限制 | CPU 核数 + 内存 |
-| **框架示例** | HikariCP、Druid、Commons Pool2 | ThreadPoolExecutor、ForkJoinPool |
-
-**Lettuce 连接池配置示例：**
-
-```properties
-# Redis 基础配置
-spring.redis.database=0
-spring.redis.host=10.220.0.2
-spring.redis.port=6379
-spring.redis.password=Cxsk@2022
-
-# Lettuce 连接池配置
-spring.redis.lettuce.pool.min-idle=0
-spring.redis.lettuce.pool.max-active=8
-spring.redis.lettuce.pool.max-idle=8
-spring.redis.lettuce.pool.max-wait=-1
-
-# 连接超时配置
-spring.redis.connect-timeout=30000
+```yaml
+spring:
+  data:
+    redis:
+      lettuce:
+        pool:
+          max-active: 8       # 最大活跃连接数
+          max-idle: 8         # 最大空闲连接数
+          min-idle: 0         # 最小空闲连接数（常驻）
+          max-wait: -1ms      # 获取连接最大等待时间，-1 表示无限等待
 ```
 
 | 参数 | 含义 | 建议值 |
 |------|------|--------|
-| `min-idle` | 最小空闲连接数 | 预热场景设 2~4，多数场景用默认 0 |
-| `max-active` | 最大活跃连接数 | 根据并发量预估，一般 8~50 |
-| `max-idle` | 最大空闲连接数 | ≤ `max-active`，避免浪费 Redis 连接 |
-| `max-wait` | 获取连接最大等待时间(ms) | -1 表示无限等待，生产建议设 3000~5000 |
-| `time-between-eviction-runs` | 空闲连接检测间隔 | 配合 `max-idle` 使用，回收多余连接 |
+| `max-active` | 池最大连接数（**保命上限**） | 按并发预估，一般 8~50 |
+| `max-idle` | 最大空闲连接数 | ≤ `max-active`，避免浪费 |
+| `min-idle` | 最小空闲连接数（常驻，省首次建连） | 预热场景设 2~4，多数用 0 |
+| `max-wait` | 连接耗尽时的等待时间 | 生产建议 3000~5000ms，别用 -1 |
+| `time-between-eviction-runs` | 空闲检测间隔（配合 test-while-idle） | 30s~60s |
 
-> **注意**：Lettuce 本身基于 Netty，单连接就支持并发（共享连接），连接池主要解决的是连接数上限控制和资源隔离问题。
-
-### 2.3 RedisTemplate 配置
-
-```java
-@Configuration
-public class RedisConfig {
-    @Bean
-    public RedisTemplate<String, Object> redisTemplate(RedisConnectionFactory factory) {
-        RedisTemplate<String, Object> template = new RedisTemplate<>();
-        template.setConnectionFactory(factory);
-
-        // Key 统一用 String 序列化，保证可读性
-        template.setKeySerializer(new StringRedisSerializer());
-        template.setHashKeySerializer(new StringRedisSerializer());
-
-        // Value 用 JSON 序列化，支持复杂对象
-        template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
-        template.setHashValueSerializer(new GenericJackson2JsonRedisSerializer());
-
-        template.afterPropertiesSet();
-        return template;
-    }
-}
-```
-
-> **为什么 Key 用 String 序列化？** 保证 key 在 Redis 中可读、可搜索。如果用 JDK 序列化，key 会变成一堆不可读的二进制。
-> **为什么 Value 用 JSON 序列化？** 可读性好，跨语言兼容。GenericJackson2JsonRedisSerializer 会在 JSON 中记录 `@class` 信息，反序列化时可以还原类型。
+> **坑**：Lettuce 的 `pool` 配置要生效，**必须引入 `commons-pool2` 依赖**，否则配置不报错但池化不生效（退化为单连接）。
 
 ---
 
