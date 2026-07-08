@@ -1,7 +1,9 @@
 {
   "permissions": {
+    "allow": [
+      "WebSearch"
+    ],
     "defaultMode": "bypassPermissions",
-    "allow": [],
     "additionalDirectories": [
       "C:\\Users\\heyoufeng\\Desktop\\随笔\\__TRACKED_VAR__\\.claude"
     ]

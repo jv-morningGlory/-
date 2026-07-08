@@ -144,7 +144,23 @@ public class Singleton {
 | `java.sql.DriverManager` | **Bootstrap**（最顶层） | `JAVA_HOME/lib` 核心类 |
 | `com.mysql.cj.jdbc.Driver` | **AppClassLoader** | classpath 下第三方 jar |
 
-**矛盾**：`DriverManager` 要加载第三方 `Driver`，但双亲委派**只能向上委托、不能向下找人**。Bootstrap 已是最顶层，没有父加载器可委托，看不到 classpath 下的类 → 核心类需要反过来使用下层加载器，单向链走不通。
+**为什么必然加载失败（推理链）**
+
+```
+DriverManager 中引用了 Driver
+      ↓
+按默认规则：Driver 的加载起点 = DriverManager 的加载器 = Bootstrap
+      ↓
+Bootstrap 是顶层，没有父加载器可委派，只能自己找
+      ↓
+Bootstrap 的搜索范围只有 JDK 核心库 → 找不到 mysql.jar 里的 Driver
+      ↓
+ClassNotFoundException → driver 加载失败 ✗
+```
+
+> 按默认规则 driver 真的加载不了——**这个必然失败，就是必须破坏双亲委派的根本原因**。
+
+**补充**：DriverManager 不是 `new Driver()`，而是走 SPI（ServiceLoader）+ TCCL 自动发现驱动，这才是它能绕开上面这条失败链的原因。
 
 **解决方案：线程上下文类加载器（TCCL）**
 
