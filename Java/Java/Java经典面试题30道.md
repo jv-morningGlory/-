@@ -52,46 +52,34 @@ Throwable
 
 ### 5. 接口和抽象类的区别?
 
-| 对比项 | 接口(interface) | 抽象类(abstract class) |
-|--------|-----------------|------------------------|
-| 关键字 | `implements` | `extends` |
-| 多继承 | 一个类可实现**多个** | 只能继承**一个** |
-| 方法 | 默认 public abstract(JDK8+ 支持 default/static 方法体) | 可有普通方法实现 |
-| 字段 | 只能是 public static final 常量 | 可有任意成员变量 |
-| 设计语义 | **行为契约**(能做什么) | **模板复用**(是什么) |
+> **核心**:接口是**行为契约**(能做什么 / Can-do),抽象类是**模板复用**(是什么 / Is-a)。
 
-> **选择标准**:定义跨类型族的公共行为用接口(如 `Comparable`);一组相关类共享代码和字段用抽象类。
+| | 接口 `interface` | 抽象类 `abstract class` |
+|---|---|---|
+| 关系 | `implements`,可多实现 | `extends`,单继承 |
+| 成员 | 抽象方法 + 常量(`public static final`) | 可有普通方法、成员变量 |
+
+**怎么选:** 跨类型族共享同一行为 → 接口(如 `Comparable`);同一类型族共享代码和字段 → 抽象类。
+
+> 一句话记忆:**接口定能力,抽象类定血统。**
 
 ### 6. 深拷贝与浅拷贝的区别?
 
-- **浅拷贝**:复制对象本身,但**引用类型字段仍指向同一对象**(改一个影响另一个)。
-- **深拷贝**:引用类型字段也**新建独立对象**,彻底互不影响。
+> **核心**:浅拷贝只复制第一层,引用类型字段仍指向**同一对象**;深拷贝递归复制所有层级,引用类型字段也**新建独立对象**。
 
-```java
-// 浅拷贝:实现 Cloneable + super.clone()
-// 深拷贝:对每个引用字段再次 clone,或序列化/反序列化
-```
+| | 浅拷贝 | 深拷贝 |
+|---|---|---|
+| 引用类型字段 | 共享同一对象 | 新建独立对象 |
+| 修改副本 | 影响原对象 | 不影响 |
+| 实现 | `Cloneable` + `clone()` | 见下方三种方式 |
 
-> **实战动作**:POJO 链表、嵌套对象拷贝必须用深拷贝;浅拷贝会引发"改副本影响原始数据"的隐蔽 bug。
+**深拷贝的三种实现:**
 
-### 7. final 关键字的作用?
+1. **手动递归 clone**:实现 `Cloneable`,重写 `clone()`,对引用字段再次 clone。嵌套深时繁琐易漏。
+2. **JSON 序列化**(Jackson/Gson):对象 → JSON 字符串 → 新对象。省事、跨语言;但要求无参构造+getter/setter,丢 `transient` 字段,不支持循环引用。
+3. **二进制序列化**(Java `Serializable`):对象 → 字节流 → 新对象(`ObjectOutputStream`/`ObjectInputStream`)。保留完整状态;但所有相关对象都要实现 `Serializable`。
 
-| 修饰对象 | 作用 |
-|----------|------|
-| 类 | 不能被继承(如 `String`) |
-| 方法 | 不能被重写 |
-| 变量(基本类型) | 值不可变(常量) |
-| 变量(引用类型) | 引用不可变,但**对象内容可变** |
-
-> **踩坑**:`final List list = new ArrayList();` 仍可 `list.add()`,final 锁的是引用不是对象。
-
-### 8. Java 面向对象的三大特性?
-
-- **封装**:私有化属性,提供 getter/setter,隐藏内部实现。
-- **继承**:子类复用父类的属性和方法,单继承(`extends`)。
-- **多态**:同一方法调用,因对象不同而表现不同行为(重写 + 父类引用指向子类对象)。
-
-> **多态的三个前提**:继承、重写、**父类引用指向子类对象**(`Animal a = new Dog();`)。
+> **实战**:嵌套对象/集合拷贝必须用深拷贝;省事首选 JSON 序列化,要保真(保留 transient)用二进制序列化。
 
 ---
 
@@ -121,16 +109,34 @@ Map(键值对): HashMap, LinkedHashMap, TreeMap, ConcurrentHashMap, Hashtable
 
 > **实战选择**:99% 场景用 ArrayList(查询多)。即使频繁增删在尾部,ArrayList 仍更快。LinkedList 真正优势仅在**频繁头部插入**。
 
-### 11. ArrayList 的扩容机制?
+### 11. ArrayList 多线程并发修改为什么会报错?
 
-1. 无参构造初始化为**空数组**(JDK7 是直接分配 10,有内存浪费)。
-2. 第一次 `add` 时扩容到 **10**。
-3. 后续每次扩容为原来的 **1.5 倍**(`oldCapacity + (oldCapacity >> 1)`)。
+**根本原因**:方法没有 `synchronized`,且 `add` 等操作**非原子**,多线程下出三类问题:
+
+- **数据覆盖**:`elementData[size++] = e` 非原子,两线程读到同一 size,后写覆盖先写 → **丢元素**。
+- **数组越界**:扩容时两线程同时判断"够用",同时写入 → `ArrayIndexOutOfBoundsException`。
+- **fail-fast 报错**:并发修改触发 `ConcurrentModificationException`。
+
+**modCount —— 修改计数器**:定义在父类 `AbstractList`(`protected transient int modCount = 0;`),记录列表**结构性修改**(改变大小或顺序)的次数。
+
+- `add` / `remove` / `clear` / `sort` → `modCount++`
+- `get` / `set` 不改结构 → **不 +1**(所以遍历中改元素值不会报错,只有增删才报错)
+
+**fail-fast 报错机制**:
+
+1. 创建迭代器时拍快照:`int expectedModCount = modCount;`
+2. 每次 `next()` 比对:`modCount != expectedModCount` 就抛 `ConcurrentModificationException`
+3. 遍历期间一旦增删 → `modCount++` → 快照过期 → 抛异常
 
 ```java
-// 预知数据量时,提前指定容量避免多次扩容
-List<Integer> list = new ArrayList<>(1000);
+// ❌ 增强 for(底层是迭代器)边遍历边删 → 抛 CME
+for (String s : list) { if ("b".equals(s)) list.remove(s); }
+// ✅ 用迭代器自己的 remove(会同步更新 expectedModCount)
+Iterator<String> it = list.iterator();
+while (it.hasNext()) { if ("b".equals(it.next())) it.remove(); }
 ```
+
+> **实战动作**:多线程场景换 `CopyOnWriteArrayList`(读多写少)或 `Collections.synchronizedList()`;单线程遍历删除用迭代器 `remove()` 或 `removeIf()`。
 
 ### 12. HashMap 的底层实现原理?
 

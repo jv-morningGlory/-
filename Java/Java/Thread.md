@@ -123,3 +123,38 @@ try { /* 临界区 */ } finally { lock.unlock(); }
 - 判断条件用 `while`，防虚假唤醒
 
 > 优势：一把锁能 `newCondition()` 出**多个独立等待队列**（如生产者一个、消费者一个），`signal` 精准唤醒目标队列，不像 `notifyAll` 把所有人都叫醒。 
+
+
+### 3. Semaphore（信号量）
+
+控制**同时访问某资源的线程数量**——本质是一组"许可"（permits）。`ReentrantLock` 是独占（许可=1），Semaphore 是共享（许可=N），可理解为**共享锁的计数器**。
+
+| 方法 | 作用 |
+|---|---|
+| `acquire()` | 拿 1 个许可，没有就阻塞（可中断） |
+| `tryAcquire(timeout)` | 尝试拿，超时返回 false |
+| `release()` | 释放 1 个许可 |
+| `availablePermits()` | 当前剩余许可数 |
+
+```java
+// 3 个许可 = 同时最多 3 个线程进入
+Semaphore semaphore = new Semaphore(3);
+
+public void access() throws InterruptedException {
+    semaphore.acquire();          // 拿许可，拿不到就等
+    try {
+        // 临界区（最多 3 个线程同时在里面）
+    } finally {
+        semaphore.release();      // 必须 finally 释放
+    }
+}
+```
+
+要点：
+
+1. acquire 拿不到许可的线程进 AQS 队列 park → 状态 **WAITING**（同 ReentrantLock，不是 BLOCKED）。
+2. **release 不强制配对 acquire**：一个线程 acquire、另一个也能 release——可做"通知"用（初始许可设 0，一个线程 release 唤醒等待者）。
+3. **公平模式**：`new Semaphore(3, true)` 走 FIFO，默认非公平。
+4. **典型场景**：限流、连接池容量控制、限制并发任务数。
+
+> 对比：锁是"同一时刻 1 个"（互斥），Semaphore 是"同一时刻 N 个"（限流）。许可=1 的 Semaphore 退化成互斥锁，但**不支持重入**。
