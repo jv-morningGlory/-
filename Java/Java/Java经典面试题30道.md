@@ -12,9 +12,6 @@
 - `==`:判断两个对象的**内存地址**是否相等。基本类型比较**值**,引用类型比较**地址**。
 - `equals`:默认行为同 `==`(继承自 Object),但通常被**重写**为比较**内容**是否相等。
 
-> **实战判断**:比较基本类型或判断是否同一对象用 `==`;比较两个对象"内容是否一致"必须用重写后的 `equals`。
-> **踩坑**:`Integer` 在 `[-128, 127]` 有缓存,`==` 比较可能为 true,超出范围为 false —— 永远用 `equals` 比较 Integer。
-
 ### 2. String、StringBuilder、StringBuffer 的区别?
 
 | 对比项 | String | StringBuilder | StringBuffer |
