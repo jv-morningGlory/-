@@ -6,12 +6,12 @@
 
 | 状态 | 含义 | 触发方式 |
 |------|------|----------|
-| **NEW** | 已创建未启动 | `new Thread()` 后，未调 `start()` |
-| **RUNNABLE** | 可运行（含就绪 + 运行中） | 调 `start()` 后进入 |
-| **BLOCKED** | 阻塞，等 monitor 锁 | 等 `synchronized` 锁，进 ObjectMonitor 的 _EntryList |
-| **WAITING** | 无限期等待 | `wait()` / `join()` / `LockSupport.park()` |
-| **TIMED_WAITING** | 限期等待 | `sleep(ms)` / `wait(ms)` / `join(ms)` |
-| **TERMINATED** | 终止 | `run()` 执行完或异常退出 |
+| **new** | 已创建未启动 | `new Thread()` 后，未调 `start()` |
+| **runnable** | 可运行（含就绪 + 运行中） | 调 `start()` 后进入 |
+| **blocked** | 阻塞，等 monitor 锁 | 等 `synchronized` 锁，进 ObjectMonitor 的 _EntryList |
+| **waiting** | 无限期等待 | `wait()` / `join()` / `LockSupport.park()` |
+| **timed_waiting** | 限期等待 | `sleep(ms)` / `wait(ms)` / `join(ms)` |
+| **terminated** | 终止 | `run()` 执行完或异常退出 |
 
 ---
 
@@ -79,8 +79,11 @@ A 被 notify 唤醒:
 | `wait()` | 等待（须在 synchronized 内） | → WAITING | ✅ |
 | `wait(ms)` | 超时等待 | → TIMED_WAITING | ✅ |
 | `notify()/notifyAll()` | 唤醒等待线程 | 被唤醒者 → BLOCKED | ❌（不立即释放） |
-| `interrupt()` | 设中断标志 | 不直接改 | — |
+| `interrupt()` | 请求中断 | 不直接改 | — |
+| `isInterrupted()` | 查中断标志（不清除） | — | — |
+| `Thread.interrupted()` | 查中断标志并**清除** | — | — |
 | `LockSupport.park()` | 挂起当前线程 | → WAITING | ❌ |
+| `LockSupport.unpark(t)` | 唤醒指定线程 | → RUNNABLE | — |
 
 要点：
 
@@ -89,6 +92,9 @@ A 被 notify 唤醒:
 3. **`wait()/notify()` 必须在 `synchronized(obj)` 内**、且操作同一个 obj，否则抛 `IllegalMonitorStateException`。
 4. **`notify()` 不立即释放锁**——要等当前同步块执行完，唤醒的线程才能抢到锁（所以被唤醒者先变 BLOCKED）。
 5. **`interrupt()` 是"请求"不是"强制停止"**；只有线程正卡在 `sleep/wait/join` 时才会抛 `InterruptedException`，正常运行的线程只是拿到一个标志位，要自己判断处理。
+6. **`isInterrupted()` vs `Thread.interrupted()`**：前者查不清除，后者查完**立即清除**标志位。`Thread.interrupted()` 常用在循环条件中：`while (!Thread.interrupted()) { ... }`，退出时标志位已被清除，不会意外传播。
+7. **`InterruptedException` 的清除陷阱**：`sleep/wait/join` 抛出 `InterruptedException` 时会**自动清除**中断标志——catch 里如果什么都不做，中断信息就丢了。正确做法：要么重新 `Thread.currentThread().interrupt()` 恢复标志，要么直接向上传播异常。
+8. **`LockSupport.park/unpark` vs `wait/notify`**：`unpark(t)` 可以**提前许可**（先 unpark 后 park 不会阻塞），且能**精准唤醒指定线程**；而 `notify` 只能随机唤醒一个，且必须先 wait 才能被 notify 唤醒。park 不需要 synchronized。
 
 ---
 

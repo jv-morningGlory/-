@@ -53,11 +53,6 @@ public class PrintBySync {
 }
 ```
 
-**要点**：
-
-- 外层 `while (NUMBER <= MAX)` 控制总进度，内层 `while (turn != myTurn)` 守护"轮到我才动"
-- 每次打印完 `turn = (turn+1)%3` 切换 + `notifyAll` 唤醒所有人，各线程自判是否轮到自己
-- 到 MAX 后再 `notifyAll` 一次，叫醒仍在 `wait` 的线程退出，避免死等
 
 ### 方式 2：ReentrantLock + Condition（两 Condition 互相唤醒）
 
