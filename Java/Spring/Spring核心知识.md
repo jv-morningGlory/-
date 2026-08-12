@@ -783,14 +783,120 @@ public void scheduledTask() { ... }
 public void fixedDelayTask() { ... }
 ```
 
-### 15.7 面试回答模板
+### 15.7 配置三件套（自定义 Starter 核心，面试高频追问）
+
+`@ConfigurationProperties`、`@EnableConfigurationProperties`、`@ConditionalOnProperty` 这三个是 Spring Boot「外部化配置」的核心，自定义 Starter 时几乎必用，也是面试官追问「你了解自动配置原理吗」的标准考点。
+
+**1. `@ConfigurationProperties` —— 批量绑定配置**
+
+对比 `@Value` 逐个注入，`@ConfigurationProperties` 把**同前缀的一组配置**一次性绑到一个 POJO：
+
+```yaml
+# application.yml
+app:
+  name: order-service
+  port: 8080
+  enable-redis: true
+```
+
+```java
+@Data
+@Component                                // 简单场景：直接注册为 Bean
+@ConfigurationProperties(prefix = "app")  // 绑定 app.* 配置
+public class AppProperties {
+    private String name;
+    private Integer port;
+    private Boolean enableRedis;          // 松散绑定：enable-redis → enableRedis
+}
+```
+
+> **松散绑定（Relaxed Binding）**：`enable-redis`、`ENABLE_REDIS`、`enableRedis` 都能映射到 `enableRedis` 字段——这是 `@ConfigurationProperties` 独有的能力，`@Value` 不支持。
+
+| 对比 | `@Value` | `@ConfigurationProperties` |
+|------|----------|---------------------------|
+| 注入方式 | 单个字段 | 批量绑定整个对象 |
+| 松散绑定 | ❌ | ✅ |
+| SpEL 表达式 | ✅ | ❌ |
+| 元数据提示（IDE 自动补全） | ❌ | ✅ |
+| 校验支持 | ❌ | ✅（配合 `@Validated`） |
+| 适用场景 | 偶尔取一两个值 | 结构化配置（Starter、多参数模块） |
+
+**2. `@EnableConfigurationProperties` —— 注册配置类为 Bean**
+
+`@ConfigurationProperties` 标记的类**本身不会自动成为 Bean**，需要二选一：
+
+- 在该类上加 `@Component`（简单场景，类在扫描包内），**或**
+- 在配置类上用 `@EnableConfigurationProperties` 显式注册（Starter 场景）
+
+```java
+@Configuration
+@EnableConfigurationProperties(AppProperties.class)  // 显式导入为 Bean
+public class AppConfig { }
+```
+
+> **为什么 Starter 必须用 `@EnableConfigurationProperties` 而不是 `@Component`？**
+> Starter 的类通常不在应用的 `@ComponentScan` 扫描范围内，加 `@Component` 根本扫不到。`@EnableConfigurationProperties` 底层通过 `@Import` 显式导入，不受包扫描限制——这正是它存在的根本原因。
+
+**3. `@ConditionalOnProperty` —— 配置开关**
+
+根据配置属性值决定 Bean **是否装配**，常用于功能开关：
+
+```java
+@Bean
+@ConditionalOnProperty(
+    prefix = "app.cache",
+    name = "type",
+    havingValue = "redis",     // app.cache.type=redis 时才装配
+    matchIfMissing = false      // 配置缺失时不装配（默认 false）
+)
+public CacheManager redisCacheManager() { ... }
+```
+
+| 参数 | 作用 |
+|------|------|
+| `prefix` | 属性前缀 |
+| `name` / `value` | 属性名（可多个） |
+| `havingValue` | 期望值，匹配才生效（不填则**只要属性存在**就生效） |
+| `matchIfMissing` | 配置完全缺失时是否生效（默认 `false`，即缺失则不装配） |
+
+**三者配合：自定义 Starter 典型写法**
+
+```java
+// 1. 定义配置属性（不加 @Component，交给 @EnableConfigurationProperties）
+@Data
+@ConfigurationProperties(prefix = "my.starter")
+public class MyStarterProperties {
+    private Boolean enabled = true;
+    private String name;
+}
+
+// 2. 自动配置类（在 resources/META-INF/spring/...AutoConfiguration.imports 注册）
+@Configuration
+@EnableConfigurationProperties(MyStarterProperties.class)                      // 启用绑定
+@ConditionalOnProperty(prefix = "my.starter", name = "enabled", havingValue = "true")  // 开关控制
+public class MyStarterAutoConfiguration {
+
+    @Bean
+    @ConditionalOnMissingBean  // 用户没自定义才用默认实现
+    public MyService myService(MyStarterProperties properties) {
+        return new MyService(properties.getName());
+    }
+}
+```
+
+> **面试一句话总结**：`@ConfigurationProperties` **绑配置**、`@EnableConfigurationProperties` **注册配置类**（解决包扫描不到的问题）、`@ConditionalOnProperty` **控开关**——自定义 Starter 三件套。
+
+---
+
+### 15.8 面试回答模板
 
 > "我按使用场景分几类来说：
 > 1. **启动类**：`@SpringBootApplication`，它是三个注解的合体
 > 2. **Bean 注册**：`@Service`、`@Repository`（注意它的异常转换能力）、`@RestController`
 > 3. **注入**：`@Autowired` 按类型、`@Qualifier` 按名称、`@Lazy` 延迟加载
-> 4. **参数绑定**：`@Value` 单个、`@ConfigurationProperties` 批量
+> 4. **参数绑定**：`@Value` 单个、`@ConfigurationProperties` 批量（松散绑定）
 > 5. **条件装配**：`@ConditionalOnClass`、`@ConditionalOnMissingBean`，这是自动配置的核心
 > 6. **异步定时**：`@Async` + `@Scheduled`
+> 7. **配置三件套**：`@ConfigurationProperties` + `@EnableConfigurationProperties` + `@ConditionalOnProperty`，写自定义 Starter 必用
 >
-> 实际项目里最常用的是前四类，条件装配主要在写 Starter 或框架级配置时用。"
+> 实际项目里最常用的是前四类，条件装配和配置三件套主要在写 Starter 或框架级配置时用。"
