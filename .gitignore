@@ -2,3 +2,5 @@ CLAUDE.md
 
 node_modules/
 .mcp-servers/
+.claude/
+.playwright-mcp/
