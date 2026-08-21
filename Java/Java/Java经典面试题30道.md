@@ -36,29 +36,9 @@ Throwable
 > **判断标准**:编译器强制 try-catch 或 throws 的是**检查异常**;运行期才暴露的是**运行时异常**。
 > **处理动作**:受检异常必须处理;运行时异常优先**修复代码逻辑**,而非捕获后吞掉。
 
-### 4. 重载(Overload)与重写(Override)的区别?
-
-| 对比项 | 重载 | 重写 |
-|--------|------|------|
-| 发生位置 | 同一个类 | 父子类之间 |
-| 方法名 | 相同 | 相同 |
-| 参数列表 | **必须不同** | **必须相同** |
-| 返回值 | 无要求 | 相同或子类型(协变返回) |
-| 访问权限 | 无限制 | 不能比父类更严格 |
-| 多态 | 编译时(静态分派) | 运行时(动态绑定) |
-
 ### 5. 接口和抽象类的区别?
 
 > **核心**:接口是**行为契约**(能做什么 / Can-do),抽象类是**模板复用**(是什么 / Is-a)。
-
-| | 接口 `interface` | 抽象类 `abstract class` |
-|---|---|---|
-| 关系 | `implements`,可多实现 | `extends`,单继承 |
-| 成员 | 抽象方法 + 常量(`public static final`) | 可有普通方法、成员变量 |
-
-**怎么选:** 跨类型族共享同一行为 → 接口(如 `Comparable`);同一类型族共享代码和字段 → 抽象类。
-
-> 一句话记忆:**接口定能力,抽象类定血统。**
 
 ### 6. 深拷贝与浅拷贝的区别?
 
@@ -105,35 +85,6 @@ Map(键值对): HashMap, LinkedHashMap, TreeMap, ConcurrentHashMap, Hashtable
 | 线程安全 | 不安全 | 不安全 |
 
 > **实战选择**:99% 场景用 ArrayList(查询多)。即使频繁增删在尾部,ArrayList 仍更快。LinkedList 真正优势仅在**频繁头部插入**。
-
-### 11. ArrayList 多线程并发修改为什么会报错?
-
-**根本原因**:方法没有 `synchronized`,且 `add` 等操作**非原子**,多线程下出三类问题:
-
-- **数据覆盖**:`elementData[size++] = e` 非原子,两线程读到同一 size,后写覆盖先写 → **丢元素**。
-- **数组越界**:扩容时两线程同时判断"够用",同时写入 → `ArrayIndexOutOfBoundsException`。
-- **fail-fast 报错**:并发修改触发 `ConcurrentModificationException`。
-
-**modCount —— 修改计数器**:定义在父类 `AbstractList`(`protected transient int modCount = 0;`),记录列表**结构性修改**(改变大小或顺序)的次数。
-
-- `add` / `remove` / `clear` / `sort` → `modCount++`
-- `get` / `set` 不改结构 → **不 +1**(所以遍历中改元素值不会报错,只有增删才报错)
-
-**fail-fast 报错机制**:
-
-1. 创建迭代器时拍快照:`int expectedModCount = modCount;`
-2. 每次 `next()` 比对:`modCount != expectedModCount` 就抛 `ConcurrentModificationException`
-3. 遍历期间一旦增删 → `modCount++` → 快照过期 → 抛异常
-
-```java
-// ❌ 增强 for(底层是迭代器)边遍历边删 → 抛 CME
-for (String s : list) { if ("b".equals(s)) list.remove(s); }
-// ✅ 用迭代器自己的 remove(会同步更新 expectedModCount)
-Iterator<String> it = list.iterator();
-while (it.hasNext()) { if ("b".equals(it.next())) it.remove(); }
-```
-
-> **实战动作**:多线程场景换 `CopyOnWriteArrayList`(读多写少)或 `Collections.synchronizedList()`;单线程遍历删除用迭代器 `remove()` 或 `removeIf()`。
 
 ### 12. HashMap 的底层实现原理?
 
