@@ -281,3 +281,317 @@ AvlNode rebalance(AvlNode a) {
 ```
 
 > 生产环境用 `TreeMap` / `TreeSet`（红黑树）。手写 AVL 是为了考试时能在纸上把四种旋转做对。
+
+---
+
+## 八、从 BST 改成 AVL（动手）
+
+AVL = BST + 每个节点记高度 + 插入/删除回溯时 `rebalance`。
+
+查找、中序打印、`findMin` **一行都不用改**。只动 Node、insert、delete。
+
+### 第 1 步：Node 加 `height`
+
+叶子高度约定为 **1**，空树为 **0**（和本文开头一致）。
+
+```java
+private static class Node {
+    int val;
+    int height = 1;
+    Node left;
+    Node right;
+
+    Node(int val) {
+        this.val = val;
+    }
+}
+```
+
+去掉 `@Data`，内部类直接访问字段。
+
+### 第 2 步：三个工具函数
+
+每次改完孩子，必须先刷新自己的 height，再算 bf。
+
+```java
+private int h(Node n) {
+    return n == null ? 0 : n.height;
+}
+
+private void refresh(Node n) {
+    n.height = 1 + Math.max(h(n.left), h(n.right));
+}
+
+private int bf(Node n) {
+    return n == null ? 0 : h(n.left) - h(n.right);
+}
+```
+
+### 第 3 步：左旋 / 右旋
+
+旋转只动指针，中序顺序不变。先 `refresh` 降下去的节点，再 `refresh` 升上来的（高度依赖孩子）。
+
+```java
+private Node rotateRight(Node a) {
+    Node b = a.left;
+    a.left = b.right;  // T3 过继给 A
+    b.right = a;
+    refresh(a);
+    refresh(b);
+    return b;          // B 变成这棵子树的新根
+}
+
+private Node rotateLeft(Node a) {
+    Node b = a.right;
+    a.right = b.left;  // T2 过继给 A
+    b.left = a;
+    refresh(a);
+    refresh(b);
+    return b;
+}
+```
+
+### 第 4 步：`rebalance` = 第三节那张表
+
+```java
+private Node rebalance(Node a) {
+    refresh(a);
+    if (bf(a) > 1) {              // 左重 → 最终右旋
+        if (bf(a.left) < 0) {     // LR：先把左孩子拧直
+            a.left = rotateLeft(a.left);
+        }
+        return rotateRight(a);
+    }
+    if (bf(a) < -1) {             // 右重 → 最终左旋
+        if (bf(a.right) > 0) {    // RL：先把右孩子拧直
+            a.right = rotateRight(a.right);
+        }
+        return rotateLeft(a);
+    }
+    return a;                     // |bf| ≤ 1，不用转
+}
+```
+
+### 第 5 步：insert / delete 回溯时挂上 rebalance
+
+这是相对 BST **唯一的行为变化**：原来 `return node`，现在 `return rebalance(node)`。
+
+递归从叶子往根返回，所以自然是「先修最低失衡点」。
+
+```java
+private Node insertRec(Node node, int value) {
+    if (node == null) {
+        return new Node(value);
+    }
+    if (value < node.val) {
+        node.left = insertRec(node.left, value);
+    } else if (value > node.val) {
+        node.right = insertRec(node.right, value);
+    }
+    return rebalance(node);
+}
+
+private Node deleteRec(Node node, int value) {
+    if (node == null) {
+        return null;
+    }
+    if (value < node.val) {
+        node.left = deleteRec(node.left, value);
+    } else if (value > node.val) {
+        node.right = deleteRec(node.right, value);
+    } else {
+        if (node.left == null) {
+            return node.right;   // 节点已删，父节点回溯时再 rebalance
+        }
+        if (node.right == null) {
+            return node.left;
+        }
+        Node min = findMin(node.right);
+        node.val = min.val;
+        node.right = deleteRec(node.right, min.val);
+    }
+    return rebalance(node);
+}
+```
+
+> 0/1 个孩子时直接 `return` 孩子，不要对已删除的节点 rebalance。两个孩子时：先用后继替换，再对当前节点 rebalance。
+
+### 怎么验：必须用会旋转的序列
+
+`5,3,7,2,4,6,8` 本来就是平衡的，看不出 AVL 和 BST 的差别。用连续递增：
+
+```java
+AvlTree avl = new AvlTree();
+avl.insert(10);
+avl.insert(20);
+avl.insert(30);  // BST 会歪成一条链；AVL 必须变成 20 为根
+avl.print();     // 10 20 30
+```
+
+| 步骤 | BST（不旋转） | AVL |
+| --- | --- | --- |
+| 插 10 | `10` | `10` |
+| 插 20 | `10 → 20` | `10 → 20` |
+| 插 30 | `10 → 20 → 30`（退化） | 对 10 **左旋** → `20` 为根，左右 10、30 |
+
+中序仍是 `10 20 30`（BST 性质没丢），但树高从 3 变成 2。
+
+---
+
+## 九、完整代码
+
+```java
+public class AvlTree {
+
+    private Node root;
+
+    private static class Node {
+        int val;
+        int height = 1;
+        Node left;
+        Node right;
+
+        Node(int val) {
+            this.val = val;
+        }
+    }
+
+    private int h(Node n) {
+        return n == null ? 0 : n.height;
+    }
+
+    private void refresh(Node n) {
+        n.height = 1 + Math.max(h(n.left), h(n.right));
+    }
+
+    private int bf(Node n) {
+        return n == null ? 0 : h(n.left) - h(n.right);
+    }
+
+    private Node rotateRight(Node a) {
+        Node b = a.left;
+        a.left = b.right;
+        b.right = a;
+        refresh(a);
+        refresh(b);
+        return b;
+    }
+
+    private Node rotateLeft(Node a) {
+        Node b = a.right;
+        a.right = b.left;
+        b.left = a;
+        refresh(a);
+        refresh(b);
+        return b;
+    }
+
+    private Node rebalance(Node a) {
+        refresh(a);
+        if (bf(a) > 1) {
+            if (bf(a.left) < 0) {
+                a.left = rotateLeft(a.left);
+            }
+            return rotateRight(a);
+        }
+        if (bf(a) < -1) {
+            if (bf(a.right) > 0) {
+                a.right = rotateRight(a.right);
+            }
+            return rotateLeft(a);
+        }
+        return a;
+    }
+
+    public void insert(int value) {
+        root = insertRec(root, value);
+    }
+
+    private Node insertRec(Node node, int value) {
+        if (node == null) {
+            return new Node(value);
+        }
+        if (value < node.val) {
+            node.left = insertRec(node.left, value);
+        } else if (value > node.val) {
+            node.right = insertRec(node.right, value);
+        }
+        return rebalance(node);
+    }
+
+    public boolean contains(int value) {
+        Node cur = root;
+        while (cur != null) {
+            if (value == cur.val) {
+                return true;
+            }
+            cur = value < cur.val ? cur.left : cur.right;
+        }
+        return false;
+    }
+
+    public void delete(int value) {
+        root = deleteRec(root, value);
+    }
+
+    private Node deleteRec(Node node, int value) {
+        if (node == null) {
+            return null;
+        }
+        if (value < node.val) {
+            node.left = deleteRec(node.left, value);
+        } else if (value > node.val) {
+            node.right = deleteRec(node.right, value);
+        } else {
+            if (node.left == null) {
+                return node.right;
+            }
+            if (node.right == null) {
+                return node.left;
+            }
+            Node min = findMin(node.right);
+            node.val = min.val;
+            node.right = deleteRec(node.right, min.val);
+        }
+        return rebalance(node);
+    }
+
+    private Node findMin(Node node) {
+        while (node.left != null) {
+            node = node.left;
+        }
+        return node;
+    }
+
+    public void print() {
+        printInOrder(root);
+        System.out.println();
+    }
+
+    private void printInOrder(Node node) {
+        if (node == null) {
+            return;
+        }
+        printInOrder(node.left);
+        System.out.print(node.val + " ");
+        printInOrder(node.right);
+    }
+
+    public static void main(String[] args) {
+        AvlTree avl = new AvlTree();
+        avl.insert(10);
+        avl.insert(20);
+        avl.insert(30);
+        avl.print();           // 10 20 30，根必须是 20
+
+        avl.delete(20);
+        avl.print();           // 10 30
+    }
+}
+```
+
+判断对不对，只看三件事：
+
+1. 中序仍然有序
+2. 连续插 `10,20,30` 后根是 20，不是 10
+3. 每个节点 `|bf| ≤ 1`（自己在 `rebalance` 后 assert，或 debug 打印 `bf`）
